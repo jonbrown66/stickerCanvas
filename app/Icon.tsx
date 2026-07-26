@@ -14,7 +14,19 @@ interface IconProps {
     | "palette"
     | "stroke"
     | "sliders"
-    | "scissors";
+    | "scissors"
+    | "text"
+    | "shapes"
+    | "rectangle"
+    | "ellipse"
+    | "triangle"
+    | "diamond"
+    | "line"
+    | "fill"
+    | "bold"
+    | "align-left"
+    | "align-center"
+    | "align-right";
 }
 
 const paths: Record<IconProps["name"], ReactNode> = {
@@ -106,6 +118,38 @@ const paths: Record<IconProps["name"], ReactNode> = {
       <path d="M8.12 8.12 12 12" />
     </>
   ),
+  text: (
+    <>
+      <path d="M4 5h16" />
+      <path d="M12 5v14" />
+    </>
+  ),
+  shapes: (
+    <>
+      <rect x="4" y="4" width="10" height="10" rx="1.5" />
+      <circle cx="16.5" cy="16.5" r="3.5" />
+    </>
+  ),
+  rectangle: <rect x="4" y="6" width="16" height="12" rx="2" />,
+  ellipse: <ellipse cx="12" cy="12" rx="8" ry="5.5" />,
+  triangle: <path d="m12 4 8 16H4L12 4Z" />,
+  diamond: <path d="m12 3 8 9-8 9-8-9 8-9Z" />,
+  line: <path d="M4 18 20 6" />,
+  fill: (
+    <>
+      <path d="m7 3 10 10-6.5 6.5a2.1 2.1 0 0 1-3 0l-3-3a2.1 2.1 0 0 1 0-3L11 7" />
+      <path d="M3 21h18" />
+    </>
+  ),
+  bold: (
+    <>
+      <path d="M7 4h6a4 4 0 0 1 0 8H7z" />
+      <path d="M7 12h7a4 4 0 0 1 0 8H7z" />
+    </>
+  ),
+  "align-left": <path d="M4 6h16M4 10h10M4 14h16M4 18h12" />,
+  "align-center": <path d="M4 6h16M7 10h10M4 14h16M6 18h12" />,
+  "align-right": <path d="M4 6h16M10 10h10M4 14h16M8 18h12" />,
 };
 
 export function Icon({ name }: IconProps) {

@@ -1,3 +1,5 @@
+import { renderStaticHoloBorder, renderStaticOilFilm } from "./oil-film-render";
+
 export type AlphaBounds = {
   left: number;
   top: number;
@@ -168,9 +170,15 @@ export async function exportStickerWithOutline(
     const renderedHeight = Math.max(1, Math.round(naturalHeight * renderScale));
     const scale = renderedWidth / Math.max(1, displayWidth);
     const scaledOutlineWidth =
-      outlineWidth > 0 ? Math.max(1, Math.round(outlineWidth * scale)) : 0;
+      outlineWidth > 0 ? Math.max(0.75, outlineWidth * scale) : 0;
+    const scaledBlurRadius =
+      outlineWidth > 0
+        ? Math.max(0.75, Math.max(2.4, outlineWidth * 0.35) * scale)
+        : 0;
 
-    const padding = Math.ceil(scaledOutlineWidth + 16);
+    const padding = Math.ceil(
+      scaledOutlineWidth + scaledBlurRadius * 2 + 2,
+    );
     const w = renderedWidth + padding * 2;
     const h = renderedHeight + padding * 2;
 
@@ -187,10 +195,10 @@ export async function exportStickerWithOutline(
       renderedWidth,
       renderedHeight,
     );
-    const imgData = sCtx.getImageData(0, 0, w, h);
-    const pixels = imgData.data;
+    let pixels = sCtx.getImageData(0, 0, w, h).data;
 
     const size = w * h;
+    const pixelBufferLength = size * 4;
     const alpha = new Uint8Array(size);
     for (let i = 0; i < size; i += 1) {
       alpha[i] = pixels[i * 4 + 3];
@@ -253,70 +261,114 @@ export async function exportStickerWithOutline(
       }
     }
 
-    const outData = new Uint8ClampedArray(pixels.length);
-    for (let i = 0; i < size; i += 1) {
-      const p = i * 4;
-      const srcA = pixels[p + 3] / 255;
-      const d = dist[i];
-
-      if (srcA > 0.02) {
-        const bgWeight = 1 - srcA;
-        outData[p] = Math.round(pixels[p] * srcA + r * bgWeight);
-        outData[p + 1] = Math.round(pixels[p + 1] * srcA + g * bgWeight);
-        outData[p + 2] = Math.round(pixels[p + 2] * srcA + b * bgWeight);
-        outData[p + 3] = 255;
-      } else if (d <= scaledOutlineWidth + 0.5) {
-        const edgeAlpha = Math.max(0, Math.min(1, scaledOutlineWidth + 0.5 - d));
-        outData[p] = r;
-        outData[p + 1] = g;
-        outData[p + 2] = b;
-        outData[p + 3] = Math.round(edgeAlpha * 255);
-      }
-    }
+    pixels = new Uint8ClampedArray(0);
+    sourceCanvas.width = 1;
+    sourceCanvas.height = 1;
 
     const outputCanvas = document.createElement("canvas");
     outputCanvas.width = w;
     outputCanvas.height = h;
     const oCtx = outputCanvas.getContext("2d");
     if (!oCtx) throw new Error("Export canvas unavailable");
-    const exportPixels = new Uint8ClampedArray(outData.length);
-    exportPixels.set(outData);
-    oCtx.putImageData(new ImageData(exportPixels, w, h), 0, 0);
+
+    let maskCanvas: HTMLCanvasElement | null = null;
+    let softenedMaskCanvas: HTMLCanvasElement | null = null;
+    if (scaledOutlineWidth > 0) {
+      let maskPixels = new Uint8ClampedArray(pixelBufferLength);
+      for (let i = 0; i < size; i += 1) {
+        const coverage = Math.max(
+          0,
+          Math.min(1, scaledOutlineWidth + 0.5 - dist[i]),
+        );
+        const p = i * 4;
+        maskPixels[p] = 255;
+        maskPixels[p + 1] = 255;
+        maskPixels[p + 2] = 255;
+        maskPixels[p + 3] = Math.round(coverage * 255);
+      }
+
+      maskCanvas = document.createElement("canvas");
+      maskCanvas.width = w;
+      maskCanvas.height = h;
+      const maskContext = maskCanvas.getContext("2d");
+      if (!maskContext) throw new Error("Export canvas unavailable");
+      maskContext.putImageData(new ImageData(maskPixels, w, h), 0, 0);
+      maskPixels = new Uint8ClampedArray(0);
+
+      softenedMaskCanvas = document.createElement("canvas");
+      softenedMaskCanvas.width = w;
+      softenedMaskCanvas.height = h;
+      const softenedContext = softenedMaskCanvas.getContext("2d");
+      if (!softenedContext) throw new Error("Export canvas unavailable");
+      softenedContext.filter = `blur(${scaledBlurRadius}px)`;
+      softenedContext.drawImage(maskCanvas, 0, 0);
+      softenedContext.filter = "none";
+      maskCanvas.width = 1;
+      maskCanvas.height = 1;
+
+      const outlineImage = softenedContext.getImageData(0, 0, w, h);
+      const outlinePixels = outlineImage.data;
+      softenedMaskCanvas.width = 1;
+      softenedMaskCanvas.height = 1;
+      for (let i = 0; i < size; i += 1) {
+        const p = i * 4;
+        const solidAlpha = Math.max(
+          0,
+          Math.min(1, (outlinePixels[p + 3] / 255) * 24 - 11.5),
+        );
+        outlinePixels[p] = r;
+        outlinePixels[p + 1] = g;
+        outlinePixels[p + 2] = b;
+        outlinePixels[p + 3] = Math.round(solidAlpha * 255);
+      }
+      oCtx.putImageData(outlineImage, 0, 0);
+    }
+
+    if (options.oilFilmEnabled && scaledOutlineWidth > 0) {
+      const holoBorder = document.createElement("canvas");
+      holoBorder.width = w;
+      holoBorder.height = h;
+      const holoContext = holoBorder.getContext("2d");
+      if (!holoContext) throw new Error("Export canvas unavailable");
+      holoContext.drawImage(outputCanvas, 0, 0);
+      renderStaticHoloBorder(holoContext, w, h);
+      oCtx.drawImage(holoBorder, 0, 0);
+      holoBorder.width = 1;
+      holoBorder.height = 1;
+    }
+
+    oCtx.drawImage(
+      img,
+      padding,
+      padding,
+      renderedWidth,
+      renderedHeight,
+    );
 
     if (options.oilFilmEnabled) {
-      oCtx.save();
-      oCtx.globalCompositeOperation = "source-atop";
-      oCtx.globalAlpha = 0.34;
-      const spectrum = oCtx.createLinearGradient(0, h, w, 0);
-      spectrum.addColorStop(0, "#ff4d9d");
-      spectrum.addColorStop(0.2, "#ffd166");
-      spectrum.addColorStop(0.4, "#66e3b4");
-      spectrum.addColorStop(0.62, "#5eb5ff");
-      spectrum.addColorStop(0.82, "#a978ff");
-      spectrum.addColorStop(1, "#ff72d2");
-      oCtx.fillStyle = spectrum;
-      oCtx.fillRect(0, 0, w, h);
-
-      oCtx.globalAlpha = 0.24;
-      const gloss = oCtx.createRadialGradient(
-        w * 0.3,
-        h * 0.22,
-        0,
-        w * 0.3,
-        h * 0.22,
-        Math.max(w, h) * 0.72,
-      );
-      gloss.addColorStop(0, "rgba(255,255,255,0.95)");
-      gloss.addColorStop(0.38, "rgba(255,255,255,0.12)");
-      gloss.addColorStop(1, "rgba(255,255,255,0)");
-      oCtx.fillStyle = gloss;
-      oCtx.fillRect(0, 0, w, h);
-      oCtx.restore();
+      const oilCanvas = document.createElement("canvas");
+      oilCanvas.width = w;
+      oilCanvas.height = h;
+      const oilContext = oilCanvas.getContext("2d");
+      if (!oilContext) throw new Error("Export canvas unavailable");
+      oilContext.drawImage(img, padding, padding, renderedWidth, renderedHeight);
+      renderStaticOilFilm(oilContext, w, h);
+      oilContext.globalCompositeOperation = "destination-in";
+      oilContext.drawImage(img, padding, padding, renderedWidth, renderedHeight);
+      oCtx.drawImage(oilCanvas, 0, 0);
+      oilCanvas.width = 1;
+      oilCanvas.height = 1;
     }
 
     const exportBlob = await canvasToBlob(outputCanvas);
-    sourceCanvas.width = 1;
-    sourceCanvas.height = 1;
+    if (maskCanvas) {
+      maskCanvas.width = 1;
+      maskCanvas.height = 1;
+    }
+    if (softenedMaskCanvas) {
+      softenedMaskCanvas.width = 1;
+      softenedMaskCanvas.height = 1;
+    }
     outputCanvas.width = 1;
     outputCanvas.height = 1;
 

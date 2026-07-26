@@ -1,74 +1,91 @@
-import type { CanvasSticker, StickerRecord } from "./canvas-types";
+import type {
+  CanvasElement,
+  CanvasElementRecord,
+  CanvasSticker,
+  StickerRecord,
+} from "./canvas-types";
 
-export type StickerHistory = {
-  entries: StickerRecord[][];
+export type CanvasHistory = {
+  entries: CanvasElementRecord[][];
   index: number;
 };
 
-export function toStickerRecord(sticker: StickerRecord): StickerRecord {
+export function toCanvasElementRecord(
+  element: CanvasElementRecord | CanvasElement,
+): CanvasElementRecord {
+  if (element.type !== "image" && !("image" in element)) {
+    return { ...element };
+  }
+  const imageElement = element as CanvasSticker;
   return {
-    id: sticker.id,
-    image: sticker.image,
-    width: sticker.width,
-    height: sticker.height,
-    x: sticker.x,
-    y: sticker.y,
-    rotation: sticker.rotation,
-    zIndex: sticker.zIndex,
-    createdAt: sticker.createdAt,
-    outlineWidth: sticker.outlineWidth,
-    outlineColor: sticker.outlineColor,
-    oilFilmEnabled: sticker.oilFilmEnabled,
-    isCutout: sticker.isCutout,
+    id: imageElement.id,
+    type: "image",
+    image: imageElement.image,
+    width: imageElement.width,
+    height: imageElement.height,
+    x: imageElement.x,
+    y: imageElement.y,
+    rotation: imageElement.rotation,
+    zIndex: imageElement.zIndex,
+    createdAt: imageElement.createdAt,
+    outlineWidth: imageElement.outlineWidth,
+    outlineColor: imageElement.outlineColor,
+    oilFilmEnabled: imageElement.oilFilmEnabled,
+    isCutout: imageElement.isCutout,
   };
 }
 
-export function snapshotStickers(
-  stickers: readonly StickerRecord[],
-): StickerRecord[] {
-  return stickers.map(toStickerRecord);
+export function snapshotCanvasElements(
+  elements: readonly (CanvasElementRecord | CanvasElement)[],
+): CanvasElementRecord[] {
+  return elements.map(toCanvasElementRecord);
 }
 
-export function createStickerHistory(
-  stickers: readonly StickerRecord[],
-): StickerHistory {
+export function createCanvasHistory(
+  elements: readonly (CanvasElementRecord | CanvasElement)[],
+): CanvasHistory {
   return {
-    entries: [snapshotStickers(stickers)],
+    entries: [snapshotCanvasElements(elements)],
     index: 0,
   };
 }
 
-export function appendStickerHistory(
-  history: StickerHistory,
-  stickers: readonly StickerRecord[],
+export function appendCanvasHistory(
+  history: CanvasHistory,
+  elements: readonly (CanvasElementRecord | CanvasElement)[],
   maximumEntries = 30,
-): StickerHistory {
+): CanvasHistory {
   const entries = history.entries.slice(0, history.index + 1);
-  entries.push(snapshotStickers(stickers));
+  entries.push(snapshotCanvasElements(elements));
   if (entries.length > maximumEntries) entries.shift();
   return { entries, index: entries.length - 1 };
 }
 
-export function moveStickerHistory(
-  history: StickerHistory,
+export function moveCanvasHistory(
+  history: CanvasHistory,
   direction: -1 | 1,
-): { history: StickerHistory; snapshot: StickerRecord[] } | null {
+): { history: CanvasHistory; snapshot: CanvasElementRecord[] } | null {
   const index = history.index + direction;
   if (index < 0 || index >= history.entries.length) return null;
   return {
     history: { ...history, index },
-    snapshot: snapshotStickers(history.entries[index]),
+    snapshot: snapshotCanvasElements(history.entries[index]),
   };
 }
 
-export function restoreStickerSnapshot(
-  snapshot: readonly StickerRecord[],
-  current: readonly CanvasSticker[],
-): { stickers: CanvasSticker[]; revokedUrls: string[] } {
-  const currentById = new Map(current.map((sticker) => [sticker.id, sticker]));
+export function restoreCanvasSnapshot(
+  snapshot: readonly CanvasElementRecord[],
+  current: readonly CanvasElement[],
+): { elements: CanvasElement[]; revokedUrls: string[] } {
+  const currentImages = new Map(
+    current
+      .filter((element): element is CanvasSticker => element.type === "image")
+      .map((element) => [element.id, element]),
+  );
   const reusedUrls = new Set<string>();
-  const stickers = snapshot.map((record) => {
-    const existing = currentById.get(record.id);
+  const elements = snapshot.map((record): CanvasElement => {
+    if (record.type !== "image") return { ...record };
+    const existing = currentImages.get(record.id);
     if (existing?.image === record.image) {
       reusedUrls.add(existing.url);
       return { ...record, url: existing.url };
@@ -77,9 +94,31 @@ export function restoreStickerSnapshot(
   });
 
   return {
-    stickers,
+    elements,
     revokedUrls: current
-      .filter((sticker) => !reusedUrls.has(sticker.url))
-      .map((sticker) => sticker.url),
+      .filter((element): element is CanvasSticker => element.type === "image")
+      .filter((element) => !reusedUrls.has(element.url))
+      .map((element) => element.url),
+  };
+}
+
+// Compatibility exports keep existing consumers and saved tests working while
+// the canvas migrates from sticker-only naming to generic elements.
+export type StickerHistory = CanvasHistory;
+export const toStickerRecord = (
+  sticker: StickerRecord | CanvasSticker,
+): StickerRecord => toCanvasElementRecord(sticker) as StickerRecord;
+export const snapshotStickers = snapshotCanvasElements;
+export const createStickerHistory = createCanvasHistory;
+export const appendStickerHistory = appendCanvasHistory;
+export const moveStickerHistory = moveCanvasHistory;
+export function restoreStickerSnapshot(
+  snapshot: readonly CanvasElementRecord[],
+  current: readonly CanvasElement[],
+) {
+  const restored = restoreCanvasSnapshot(snapshot, current);
+  return {
+    stickers: restored.elements,
+    revokedUrls: restored.revokedUrls,
   };
 }

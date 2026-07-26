@@ -81,7 +81,17 @@ button:focus-visible,
 }
 
 .simple-sticker {
+  --holo-pointer-x: 50%;
+  --holo-pointer-y: 50%;
+  --holo-shift-x: 0px;
+  --holo-shift-y: 0px;
+  --holo-tilt: 0deg;
+  --holo-rotate-x: 0deg;
+  --holo-rotate-y: 0deg;
+  --holo-foil-opacity: 0.09;
   position: absolute;
+  left: 0;
+  top: 0;
   margin: 0;
   cursor: move;
   transform-origin: center;
@@ -89,8 +99,65 @@ button:focus-visible,
   contain: layout style;
 }
 
+.simple-sticker-canvas[data-active-tool="text"] {
+  cursor: text;
+}
 
-.simple-sticker > img {
+.simple-sticker-canvas[data-active-tool="rectangle"],
+.simple-sticker-canvas[data-active-tool="ellipse"],
+.simple-sticker-canvas[data-active-tool="triangle"],
+.simple-sticker-canvas[data-active-tool="diamond"],
+.simple-sticker-canvas[data-active-tool="line"] {
+  cursor: crosshair;
+}
+
+[data-canvas-element] {
+  touch-action: none;
+}
+
+[data-canvas-element][data-element-type="text"] {
+  cursor: text;
+}
+
+[data-canvas-element] textarea {
+  caret-color: var(--ink);
+}
+
+.canvas-shape-visual {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.simple-sticker[data-selected="true"] {
+  will-change: transform;
+}
+
+
+.simple-sticker-visual {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transform-origin: center;
+  transform-style: preserve-3d;
+}
+
+.simple-sticker[data-holo="true"] .simple-sticker-visual {
+  transform:
+    perspective(920px)
+    rotateX(var(--holo-rotate-x))
+    rotateY(var(--holo-rotate-y))
+    translateZ(0);
+}
+
+.simple-sticker[data-holo-motion="true"] .simple-sticker-visual {
+  will-change: transform;
+}
+
+.simple-sticker-visual > img {
   width: 100%;
   height: 100%;
   display: block;
@@ -99,7 +166,7 @@ button:focus-visible,
   -webkit-user-drag: none;
 }
 
-.simple-sticker[data-entering="true"] > img {
+.simple-sticker[data-entering="true"] .simple-sticker-visual > img {
   animation: simple-sticker-arrive 620ms cubic-bezier(0.16, 1, 0.3, 1)
     both;
 }
@@ -127,7 +194,8 @@ button:focus-visible,
 
 /* ── 贴纸控制句柄 (Handles) ── */
 .simple-sticker-rotate,
-.simple-sticker-settings {
+.simple-sticker-settings,
+.simple-element-delete {
   position: absolute;
   z-index: 10;
   width: calc(34px * var(--simple-control-scale));
@@ -150,13 +218,15 @@ button:focus-visible,
 }
 
 .simple-sticker-rotate:hover,
-.simple-sticker-settings:hover {
+.simple-sticker-settings:hover,
+.simple-element-delete:hover {
   transform: scale(1.12);
   background: var(--paper);
 }
 
 .simple-sticker-rotate:active,
-.simple-sticker-settings:active {
+.simple-sticker-settings:active,
+.simple-element-delete:active {
   transform: scale(0.92);
 }
 
@@ -303,6 +373,31 @@ button:focus-visible,
   backdrop-filter: blur(4px);
   pointer-events: none;
   animation: sticker-spinner-fade-in 0.2s ease-out;
+}
+
+.simple-element-delete {
+  top: 50%;
+  right: calc(-44px * var(--simple-control-scale));
+  color: oklch(0.62 0.19 28);
+  transform: translateY(-50%);
+}
+
+.simple-element-delete:hover {
+  transform: translateY(-50%) scale(1.1);
+}
+
+.simple-element-delete:active {
+  transform: translateY(-50%) scale(0.92);
+}
+
+.background-dissolve-canvas {
+  position: fixed;
+  z-index: 35;
+  display: block;
+  pointer-events: none;
+  transform-origin: center;
+  contain: strict;
+  will-change: transform, opacity;
 }
 
 @keyframes sticker-spinner-fade-in {
@@ -489,8 +584,8 @@ button:focus-visible,
   left: 50%;
   bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px));
   display: flex;
-  gap: 8px;
-  padding: 6px;
+  gap: 3px;
+  padding: 5px;
   transform: translateX(-50%);
   border-radius: 999px;
   background: oklch(0.985 0.008 85 / 0.94);
@@ -501,18 +596,19 @@ button:focus-visible,
 }
 
 .simple-floating-actions button {
-  min-width: 102px;
-  height: 48px;
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  padding: 0 20px;
+  gap: 0;
+  padding: 0;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.02em;
   cursor: pointer;
@@ -525,6 +621,24 @@ button:focus-visible,
   background: oklch(0.93 0.018 82);
 }
 
+.simple-floating-actions button > span,
+.simple-shape-menu button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.simple-floating-actions button[data-active="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
 .simple-floating-actions button:active {
   transform: scale(0.96);
 }
@@ -534,13 +648,84 @@ button:focus-visible,
   cursor: wait;
 }
 
-.simple-floating-actions .simple-camera-button {
-  background: var(--ink);
-  color: var(--paper);
+.simple-floating-actions .simple-camera-button:hover {
+  background: oklch(0.93 0.018 82);
 }
 
-.simple-floating-actions .simple-camera-button:hover {
-  background: oklch(0.31 0.028 67);
+.simple-shape-menu {
+  position: absolute;
+  right: 4px;
+  bottom: calc(100% + 10px);
+  display: grid;
+  grid-template-columns: repeat(5, 40px);
+  gap: 4px;
+  width: auto;
+  padding: 5px;
+  border-radius: 18px;
+  background: oklch(0.985 0.008 85 / 0.98);
+  box-shadow:
+    0 14px 34px oklch(0.28 0.035 65 / 0.2),
+    inset 0 0 0 1px oklch(0.5 0.025 70 / 0.14);
+  backdrop-filter: blur(16px);
+  animation: simple-tool-menu-enter 180ms cubic-bezier(0.22, 1, 0.36, 1)
+    both;
+}
+
+.canvas-style-color {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.canvas-style-color > span {
+  position: absolute;
+  inset: 5px;
+  border: 1.5px solid var(--paper);
+  border-radius: 50%;
+  box-shadow: 0 1px 4px oklch(0 0 0 / 0.2);
+  pointer-events: none;
+}
+
+.canvas-style-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.canvas-property-flyout {
+  padding: 7px 10px;
+  border-radius: 999px;
+}
+
+.canvas-property-flyout input {
+  width: 92px;
+  accent-color: var(--ink);
+}
+
+.simple-shape-menu button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+}
+
+@keyframes simple-tool-menu-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .simple-hidden-input {
@@ -765,14 +950,25 @@ button:focus-visible,
 
 @media (max-width: 560px) {
   .simple-floating-actions {
-    width: calc(100vw - 32px);
-    max-width: 360px;
+    width: auto;
+    max-width: calc(100vw - 20px);
   }
 
-  .simple-floating-actions button {
-    min-width: 0;
-    flex: 1;
+  .simple-floating-actions > button {
+    width: 48px;
+    min-width: 48px;
+    padding: 0;
   }
+
+  .simple-shape-menu {
+    right: 0;
+  }
+
+  .simple-shape-menu button {
+    width: auto;
+    min-width: 0;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -785,13 +981,52 @@ button:focus-visible,
     transition-duration: 0.01ms !important;
   }
 
+  .simple-processing-spinner {
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* ==========================================================================
    High-End Sticker Effects & Floating Settings Control Panel
    ========================================================================== */
 
-/* 真实实体质感彩光油膜/镭射流光多层效果 */
+/* 镭射描边主层：环形 SVG 遮罩把虹彩限制在实体白边上 */
+.simple-sticker-holo-border {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0.94;
+  filter:
+    drop-shadow(0 0 1.2px rgba(255, 255, 255, 0.72))
+    drop-shadow(0 1px 2px rgba(82, 168, 190, 0.18));
+  transform: translateZ(10px);
+}
+
+.simple-holo-border-spectrum {
+  opacity: 0.72;
+  transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.simple-holo-border-glint {
+  opacity: 0.34;
+  mix-blend-mode: screen;
+  transition: opacity 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.simple-sticker[data-holo-hover="true"] .simple-holo-border-spectrum {
+  opacity: 0.96;
+}
+
+.simple-sticker[data-holo-hover="true"] .simple-holo-border-glint {
+  opacity: 1;
+}
+
+/* 图片内部的低强度镭射膜：保留原图明暗和肤色 */
 .simple-sticker-oil-film {
   position: absolute;
   inset: 0;
@@ -800,132 +1035,169 @@ button:focus-visible,
   overflow: hidden;
   border-radius: inherit;
   isolation: isolate;
+  transform: translateZ(7px);
 }
 
-/* 1. 薄膜干涉彩虹油膜层 (Diffraction Rainbow Spectrum) */
+/* 零星微晶反光，避免整张贴纸同时发亮 */
+.simple-sticker-oil-film::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle, rgba(255, 255, 255, 0.75) 0 0.7px, transparent 1.2px),
+    radial-gradient(circle, rgba(195, 238, 255, 0.58) 0 0.55px, transparent 1px);
+  background-position: 0 0, 9px 13px;
+  background-size: 23px 29px, 31px 37px;
+  mix-blend-mode: screen;
+  opacity: 0.07;
+  animation: oilCrystalTwinkle 4.8s cubic-bezier(0.65, 0, 0.35, 1) infinite alternate;
+}
+
+/* 1. 薄膜干涉虹彩：color 模式保留人物肤色和原图亮度 */
 .simple-oil-spectrum {
   position: absolute;
-  inset: -25%;
-  width: 150%;
-  height: 150%;
-  background: linear-gradient(
-    125deg,
-    rgba(255, 0, 128, 0.5) 0%,
-    rgba(255, 170, 0, 0.55) 18%,
-    rgba(0, 230, 255, 0.5) 38%,
-    rgba(112, 0, 255, 0.55) 58%,
-    rgba(0, 255, 136, 0.5) 78%,
-    rgba(255, 0, 128, 0.5) 100%
-  );
-  background-size: 220% 220%;
-  mix-blend-mode: color-dodge;
-  opacity: 0.85;
-  animation: oilSpectrumRotate 7s ease-in-out infinite alternate;
+  inset: -32%;
+  background:
+    radial-gradient(ellipse 42% 66% at 21% 28%, rgba(255, 194, 92, 0.88), transparent 68%),
+    radial-gradient(ellipse 46% 72% at 76% 70%, rgba(67, 220, 203, 0.82), transparent 70%),
+    radial-gradient(ellipse 38% 58% at 72% 18%, rgba(205, 127, 255, 0.62), transparent 66%),
+    conic-gradient(
+      from 218deg at 48% 52%,
+      rgba(255, 116, 151, 0.42),
+      rgba(255, 217, 116, 0.48),
+      rgba(106, 230, 208, 0.46),
+      rgba(124, 171, 255, 0.42),
+      rgba(215, 139, 255, 0.4),
+      rgba(255, 116, 151, 0.42)
+    );
+  mix-blend-mode: color;
+  opacity: var(--holo-foil-opacity);
+  transform:
+    translate3d(var(--holo-shift-x), var(--holo-shift-y), 0)
+    rotate(var(--holo-tilt))
+    scale(1.08);
+  transition:
+    transform 120ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 2. 微晶体衍射光栅层 (Prismatic Micro-Grating Grain) */
+/* 2. 细密衍射光栅：只提供材质，不再形成明显的灰色条纹 */
 .simple-oil-grating {
   position: absolute;
   inset: 0;
-  background: repeating-linear-gradient(
-    60deg,
-    rgba(255, 255, 255, 0.16) 0px,
-    rgba(255, 255, 255, 0.16) 1.5px,
-    transparent 1.5px,
-    transparent 4px
-  );
-  mix-blend-mode: overlay;
-  opacity: 0.7;
+  background:
+    repeating-linear-gradient(
+      64deg,
+      rgba(255, 255, 255, 0.2) 0 0.65px,
+      transparent 0.65px 5.5px
+    ),
+    repeating-linear-gradient(
+      -26deg,
+      rgba(151, 219, 255, 0.12) 0 0.45px,
+      transparent 0.45px 11px
+    );
+  mix-blend-mode: soft-light;
+  opacity: 0.08;
 }
 
-/* 3. 斜向强光金属扫光束 (Specular Metallic Reflection Streak) */
+/* 3. 不对称镜面反射：窄光芯配合两侧微弱色散 */
 .simple-oil-streak {
   position: absolute;
-  inset: -50%;
-  width: 200%;
-  height: 200%;
+  inset: -55%;
   background: linear-gradient(
-    118deg,
-    transparent 0%,
-    transparent 38%,
-    rgba(255, 255, 255, 0.35) 44%,
-    rgba(255, 255, 255, 0.95) 49%,
-    rgba(255, 255, 255, 1) 50%,
-    rgba(255, 255, 255, 0.95) 51%,
-    rgba(255, 255, 255, 0.35) 56%,
-    transparent 62%,
-    transparent 100%
+    116deg,
+    transparent 0 42%,
+    rgba(255, 177, 222, 0.06) 45%,
+    rgba(255, 239, 190, 0.16) 47.6%,
+    rgba(255, 255, 248, 0.72) 49.35%,
+    rgba(255, 255, 255, 0.92) 50%,
+    rgba(197, 239, 255, 0.3) 51.1%,
+    rgba(145, 200, 255, 0.08) 53.4%,
+    transparent 57% 100%
   );
-  mix-blend-mode: hard-light;
-  opacity: 0.75;
-  animation: oilStreakSweep 4s cubic-bezier(0.25, 1, 0.3, 1) infinite;
+  mix-blend-mode: screen;
+  opacity: 0.13;
+  transform:
+    translate3d(var(--holo-shift-x), var(--holo-shift-y), 0)
+    rotate(var(--holo-tilt));
+  transition:
+    transform 110ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 4. 覆膜塑料镜面高光 (Vinyl Laminate Surface Gloss) */
+/* 4. 固定的覆膜弧面反光，提供厚度感但不漂白画面 */
 .simple-oil-gloss {
   position: absolute;
   inset: 0;
-  background: radial-gradient(
-    circle at 32% 22%,
-    rgba(255, 255, 255, 0.38) 0%,
-    rgba(255, 255, 255, 0.1) 40%,
-    transparent 70%
-  );
+  background:
+    radial-gradient(
+      ellipse 78% 52% at 28% 12%,
+      rgba(255, 255, 255, 0.26) 0%,
+      rgba(255, 255, 255, 0.07) 38%,
+      transparent 72%
+    ),
+    linear-gradient(
+      150deg,
+      rgba(255, 255, 255, 0.08),
+      transparent 32% 74%,
+      rgba(255, 255, 255, 0.05)
+    );
   mix-blend-mode: soft-light;
+  opacity: 0.28;
   pointer-events: none;
 }
 
-@keyframes oilSpectrumRotate {
+.simple-oil-cursor-glow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 58%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.48) 0%,
+    rgba(255, 245, 195, 0.18) 24%,
+    rgba(147, 225, 255, 0.1) 46%,
+    transparent 72%
+  );
+  mix-blend-mode: screen;
+  opacity: 0.06;
+  transform:
+    translate3d(var(--holo-pointer-x), var(--holo-pointer-y), 0)
+    translate(-50%, -50%);
+  transition:
+    transform 105ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.simple-sticker[data-holo-hover="true"] .simple-oil-cursor-glow {
+  opacity: 0.24;
+}
+
+@keyframes oilCrystalTwinkle {
   0% {
-    transform: rotate(0deg) scale(1);
-    filter: hue-rotate(0deg) contrast(1.2) brightness(1.05);
-  }
-  50% {
-    transform: rotate(5deg) scale(1.06);
-    filter: hue-rotate(180deg) contrast(1.35) brightness(1.12);
+    opacity: 0.06;
   }
   100% {
-    transform: rotate(-5deg) scale(1);
-    filter: hue-rotate(360deg) contrast(1.2) brightness(1.05);
+    opacity: 0.16;
   }
 }
 
-@keyframes oilStreakSweep {
-  0% {
-    transform: translate(-50%, -50%);
+@media (prefers-reduced-motion: reduce) {
+  .simple-sticker-oil-film::after {
+    animation: none;
   }
-  65% {
-    transform: translate(40%, 40%);
-  }
-  100% {
-    transform: translate(40%, 40%);
-  }
-}
 
-@keyframes oilSpectrumRotate {
-  0% {
-    transform: rotate(0deg) scale(1);
-    filter: hue-rotate(0deg) contrast(1.2) brightness(1.05);
+  .simple-oil-spectrum,
+  .simple-oil-streak,
+  .simple-oil-cursor-glow {
+    transition: none;
   }
-  50% {
-    transform: rotate(5deg) scale(1.06);
-    filter: hue-rotate(180deg) contrast(1.35) brightness(1.12);
-  }
-  100% {
-    transform: rotate(-5deg) scale(1);
-    filter: hue-rotate(360deg) contrast(1.2) brightness(1.05);
-  }
-}
 
-@keyframes oilStreakSweep {
-  0% {
-    transform: translate(-50%, -50%);
-  }
-  65% {
-    transform: translate(40%, 40%);
-  }
-  100% {
-    transform: translate(40%, 40%);
+  .simple-oil-cursor-glow,
+  .simple-holo-border-glint {
+    transition: none;
   }
 }
 

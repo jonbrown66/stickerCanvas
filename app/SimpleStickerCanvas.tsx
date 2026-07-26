@@ -10,7 +10,12 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import type {
+  CanvasElement,
+  CanvasShapeKind,
+  CanvasShapeElement,
   CanvasSticker,
+  CanvasTextElement,
+  CanvasTool,
   CanvasView,
   StickerGestureKind,
   StickerStyleOptions,
@@ -24,10 +29,12 @@ import {
   type StickerHistory,
 } from "@/lib/canvas-history";
 import { convertHeicToJpeg, isHeicFile } from "@/lib/heic";
+import { createBackgroundDissolveTexture } from "@/lib/background-dissolve";
 import {
   createOutlinedCutout,
   exportStickerWithOutline,
 } from "@/lib/sticker-image-processing";
+import { exportCanvasToPng } from "@/lib/canvas-export";
 import {
   readStickerRecords,
   removeStickerRecord,
@@ -35,20 +42,46 @@ import {
   saveStickerRecord,
 } from "@/lib/sticker-storage";
 import { CameraCapture } from "./CameraCapture";
-import { Icon } from "./Icon";
+import {
+  BackgroundDissolveEffect,
+  preloadBackgroundDissolveEffect,
+  type BackgroundDissolveEffectData,
+} from "./BackgroundDissolveEffect";
+import { CanvasBottomToolbar } from "./CanvasBottomToolbar";
+import { CanvasElementItem } from "./CanvasElementItem";
 import { StickerCanvasItem } from "./StickerCanvasItem";
 
 type StickerGesture = {
   kind: StickerGestureKind;
   pointerId: number;
   itemId: string;
+  element: HTMLElement;
   startClientX: number;
   startClientY: number;
   startDistance: number;
   startAngle: number;
   centerX: number;
   centerY: number;
-  start: CanvasSticker;
+  start: CanvasElement;
+  latest: CanvasElement;
+};
+
+type PointerSample = {
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+};
+
+type ShapeDrawingGesture = {
+  pointerId: number;
+  itemId: string;
+  startX: number;
+  startY: number;
+  startClientX: number;
+  startClientY: number;
+  start: CanvasShapeElement;
+  latest: CanvasShapeElement;
+  element: HTMLElement | null;
 };
 
 const VIEW_KEY = "simple-sticker-canvas:view";
@@ -61,6 +94,18 @@ const MAX_ZOOM = 6;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function isShapeTool(tool: CanvasTool): tool is CanvasShapeKind {
+  return tool !== "select" && tool !== "text";
+}
+
+function previewSticker(element: HTMLElement, sticker: CanvasElement) {
+  const width = `${sticker.width}px`;
+  const height = `${sticker.height}px`;
+  if (element.style.width !== width) element.style.width = width;
+  if (element.style.height !== height) element.style.height = height;
+  element.style.transform = `translate3d(${sticker.x - sticker.width / 2}px, ${sticker.y - sticker.height / 2}px, 0) rotate(${sticker.rotation}deg)`;
 }
 
 async function readImageAspect(blob: Blob) {
@@ -103,13 +148,26 @@ function initialView(): CanvasView {
   return { x: 0, y: 0, zoom: 1 };
 }
 
+async function preloadImageUrl(url: string) {
+  const image = new Image();
+  image.decoding = "async";
+  image.src = url;
+  await image.decode();
+}
+
 export function SimpleStickerCanvas() {
   const viewportRef = useRef<HTMLElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
-  const stickersRef = useRef<CanvasSticker[]>([]);
+  const stickersRef = useRef<CanvasElement[]>([]);
   const selectedIdRef = useRef<string | null>(null);
   const processingRef = useRef(false);
+  const pendingCutoutRef = useRef<{
+    effectId: string;
+    stickerId: string;
+    updated: CanvasSticker;
+    previousUrl: string;
+  } | null>(null);
   const saveTimerRef = useRef<Record<string, number>>({});
   const panRef = useRef<{
     pointerId: number;
@@ -118,8 +176,10 @@ export function SimpleStickerCanvas() {
     view: CanvasView;
   } | null>(null);
   const gestureRef = useRef<StickerGesture | null>(null);
+  const shapeDrawingRef = useRef<ShapeDrawingGesture | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const rafRef = useRef<number | null>(null);
+  const pointerSampleRef = useRef<PointerSample | null>(null);
   const pinchRef = useRef<{
     ids: [number, number];
     distance: number;
@@ -130,17 +190,24 @@ export function SimpleStickerCanvas() {
 
   const historyRef = useRef<StickerHistory>({ entries: [], index: -1 });
 
-  const [stickers, setStickers] = useState<CanvasSticker[]>([]);
+  const [stickers, setStickers] = useState<CanvasElement[]>([]);
   const [view, setView] = useState<CanvasView>(initialView);
   const viewRef = useRef<CanvasView>(view);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [enteringId, setEnteringId] = useState<string | null>(null);
   const [processingStickerId, setProcessingStickerId] = useState<string | null>(null);
+  const [dissolveEffect, setDissolveEffect] =
+    useState<BackgroundDissolveEffectData | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [notice, setNotice] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [activeTool, setActiveTool] = useState<CanvasTool>("select");
+  const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [drawingId, setDrawingId] = useState<string | null>(null);
 
-  const pushHistory = useCallback((nextStickers: CanvasSticker[]) => {
+  const pushHistory = useCallback((nextStickers: CanvasElement[]) => {
     historyRef.current = appendStickerHistory(
       historyRef.current,
       nextStickers,
@@ -189,8 +256,8 @@ export function SimpleStickerCanvas() {
   const replaceStickers = useCallback(
     (
       update:
-        | CanvasSticker[]
-        | ((current: CanvasSticker[]) => CanvasSticker[]),
+        | CanvasElement[]
+        | ((current: CanvasElement[]) => CanvasElement[]),
       recordHistory = true,
     ) => {
       setStickers((current) => {
@@ -215,6 +282,33 @@ export function SimpleStickerCanvas() {
     setSelectedId(id);
   }, []);
 
+  const commitPendingCutout = useCallback(
+    (effectId: string) => {
+      const pending = pendingCutoutRef.current;
+      if (!pending || pending.effectId !== effectId) return;
+      pendingCutoutRef.current = null;
+      replaceStickers((current) =>
+        current.map((sticker) =>
+          sticker.id === pending.stickerId ? pending.updated : sticker,
+        ),
+      );
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          URL.revokeObjectURL(pending.previousUrl);
+        });
+      });
+    },
+    [replaceStickers],
+  );
+
+  const finishDissolveEffect = useCallback(
+    (id: string) => {
+      commitPendingCutout(id);
+      setDissolveEffect((current) => (current?.id === id ? null : current));
+    },
+    [commitPendingCutout],
+  );
+
   const updateStickerStyle = useCallback(
     (
       stickerId: string,
@@ -224,7 +318,7 @@ export function SimpleStickerCanvas() {
       const current = stickersRef.current.find(
         (sticker) => sticker.id === stickerId,
       );
-      if (!current) return;
+      if (!current || current.type !== "image") return;
       const updated = { ...current, ...patch };
 
       replaceStickers(
@@ -251,6 +345,48 @@ export function SimpleStickerCanvas() {
     [replaceStickers],
   );
 
+  const updateCanvasElementProperties = useCallback(
+    (
+      elementId: string,
+      patch: Partial<CanvasTextElement | CanvasShapeElement>,
+      commit = true,
+    ) => {
+      const current = stickersRef.current.find(
+        (element) => element.id === elementId,
+      );
+      if (!current || (current.type !== "text" && current.type !== "shape")) {
+        return;
+      }
+      const updated = {
+        ...current,
+        ...patch,
+      } as CanvasTextElement | CanvasShapeElement;
+      replaceStickers(
+        (elements) =>
+          elements.map((element) =>
+            element.id === elementId ? updated : element,
+          ),
+        commit,
+      );
+
+      if (saveTimerRef.current[elementId]) {
+        window.clearTimeout(saveTimerRef.current[elementId]);
+      }
+      if (commit) {
+        delete saveTimerRef.current[elementId];
+        void saveStickerRecord(updated).catch(() => setNotice("Save failed"));
+      } else {
+        saveTimerRef.current[elementId] = window.setTimeout(() => {
+          void saveStickerRecord(updated).catch(() =>
+            setNotice("Save failed"),
+          );
+          delete saveTimerRef.current[elementId];
+        }, 240);
+      }
+    },
+    [replaceStickers],
+  );
+
   useEffect(() => {
     let disposed = false;
     void readStickerRecords()
@@ -258,7 +394,9 @@ export function SimpleStickerCanvas() {
         if (disposed) return;
         const seededVersion = localStorage.getItem(SEEDED_KEY);
         const existingExample = records.find(
-          (record) => record.id === EXAMPLE_STICKER_ID,
+          (record) =>
+            record.type === "image" &&
+            record.id === EXAMPLE_STICKER_ID,
         );
         let restoredRecords = records;
 
@@ -285,6 +423,7 @@ export function SimpleStickerCanvas() {
           const image = await response.blob();
           const sticker: CanvasSticker = {
             id: EXAMPLE_STICKER_ID,
+            type: "image",
             image,
             url: URL.createObjectURL(image),
             width: 280,
@@ -307,10 +446,15 @@ export function SimpleStickerCanvas() {
         }
         const restored = restoredRecords
           .sort((left, right) => left.zIndex - right.zIndex)
-          .map((record) => ({
-            ...record,
-            url: URL.createObjectURL(record.image),
-          }));
+          .map(
+            (record): CanvasElement =>
+              record.type === "image"
+                ? {
+                    ...record,
+                    url: URL.createObjectURL(record.image),
+                  }
+                : { ...record },
+          );
         if (!disposed) {
           replaceStickers(restored, false);
           historyRef.current = createStickerHistory(restored);
@@ -325,7 +469,9 @@ export function SimpleStickerCanvas() {
       );
       saveTimerRef.current = {};
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      stickersRef.current.forEach((sticker) => URL.revokeObjectURL(sticker.url));
+      stickersRef.current.forEach((sticker) => {
+        if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
+      });
     };
   }, [replaceStickers]);
 
@@ -340,13 +486,17 @@ export function SimpleStickerCanvas() {
   const updateSticker = useCallback(
     (
       id: string,
-      update: Partial<CanvasSticker>,
+      update: Partial<
+        Pick<CanvasElement, "x" | "y" | "width" | "height" | "rotation" | "zIndex">
+      >,
       recordHistory = false,
     ) => {
       replaceStickers(
         (current) =>
           current.map((sticker) =>
-            sticker.id === id ? { ...sticker, ...update } : sticker,
+            sticker.id === id
+              ? ({ ...sticker, ...update } as CanvasElement)
+              : sticker,
           ),
         recordHistory,
       );
@@ -361,22 +511,35 @@ export function SimpleStickerCanvas() {
         return;
       }
       if (processingRef.current) return;
+      const pending = pendingCutoutRef.current;
+      if (pending) commitPendingCutout(pending.effectId);
       processingRef.current = true;
+      setDissolveEffect(null);
       setProcessingStickerId(sticker.id);
       let createdUrl: string | null = null;
       try {
         const result = await removeImageBackground(sticker.image);
 
-        const cutout = await createOutlinedCutout(
-          result.pixels,
-          result.width,
-          result.height,
-        );
+        const [cutout, dissolveTexture] = await Promise.all([
+          createOutlinedCutout(
+            result.pixels,
+            result.width,
+            result.height,
+          ),
+          createBackgroundDissolveTexture(
+            sticker.image,
+            result.pixels,
+            result.width,
+            result.height,
+          ).catch(() => null),
+          preloadBackgroundDissolveEffect().catch(() => undefined),
+        ]);
 
         const ratio = cutout.width / cutout.height;
         const newHeight = sticker.width / ratio;
         const newUrl = URL.createObjectURL(cutout.blob);
         createdUrl = newUrl;
+        await preloadImageUrl(newUrl);
 
         const updated: CanvasSticker = {
           ...sticker,
@@ -389,11 +552,39 @@ export function SimpleStickerCanvas() {
         };
 
         await saveStickerRecord(updated);
-        replaceStickers((current) =>
-          current.map((s) => (s.id === sticker.id ? updated : s)),
-        );
+        const viewport = viewportRef.current?.getBoundingClientRect();
+        const currentView = viewRef.current;
+        if (viewport && dissolveTexture) {
+          const effectId = `${sticker.id}:${Date.now()}`;
+          pendingCutoutRef.current = {
+            effectId,
+            stickerId: sticker.id,
+            updated,
+            previousUrl: sticker.url,
+          };
+          setDissolveEffect({
+            ...dissolveTexture,
+            id: effectId,
+            centerX:
+              viewport.left +
+              viewport.width / 2 +
+              (sticker.x - currentView.x) * currentView.zoom,
+            centerY:
+              viewport.top +
+              viewport.height / 2 +
+              (sticker.y - currentView.y) * currentView.zoom,
+            displayWidth: sticker.width * currentView.zoom,
+            displayHeight: sticker.height * currentView.zoom,
+            rotation: sticker.rotation,
+          });
+        } else {
+          replaceStickers((current) =>
+            current.map((s) => (s.id === sticker.id ? updated : s)),
+          );
+          URL.revokeObjectURL(sticker.url);
+        }
+        setNotice("Cutout ready");
         createdUrl = null;
-        URL.revokeObjectURL(sticker.url);
       } catch (error) {
         if (createdUrl) URL.revokeObjectURL(createdUrl);
         console.error("Could not cutout sticker.", error);
@@ -405,7 +596,7 @@ export function SimpleStickerCanvas() {
         setProcessingStickerId(null);
       }
     },
-    [replaceStickers],
+    [commitPendingCutout, replaceStickers],
   );
 
   const processFile = useCallback(
@@ -429,39 +620,8 @@ export function SimpleStickerCanvas() {
       setNotice("Preparing photo…");
       let createdUrl: string | null = null;
       try {
-        const readable = isHeicFile(file) ? await convertHeicToJpeg(file) : file;
-        let image = readable;
-        let aspect = await readImageAspect(readable);
-        let isCutout = false;
-        let outlineWidth = 0;
-        let cutoutError: string | null = null;
-
-        try {
-          const result = await removeImageBackground(readable, (progress) => {
-            if (progress.phase === "processing") {
-              setNotice("Removing background…");
-              return;
-            }
-            const percentage = Math.round(progress.progress ?? 0);
-            setNotice(
-              percentage > 0
-                ? `Loading cutout model… ${percentage}%`
-                : "Loading cutout model…",
-            );
-          });
-          const cutout = await createOutlinedCutout(
-            result.pixels,
-            result.width,
-            result.height,
-          );
-          image = cutout.blob;
-          aspect = cutout.width / Math.max(1, cutout.height);
-          isCutout = true;
-          outlineWidth = 8;
-        } catch (error) {
-          cutoutError =
-            error instanceof Error ? error.message : "Background removal failed";
-        }
+        const image = isHeicFile(file) ? await convertHeicToJpeg(file) : file;
+        const aspect = await readImageAspect(image);
 
         const url = URL.createObjectURL(image);
         createdUrl = url;
@@ -483,6 +643,7 @@ export function SimpleStickerCanvas() {
 
         const sticker: CanvasSticker = {
           id: crypto.randomUUID(),
+          type: "image",
           image,
           url,
           width,
@@ -492,10 +653,10 @@ export function SimpleStickerCanvas() {
           rotation: 0,
           zIndex: topZ + 1,
           createdAt: Date.now(),
-          outlineWidth,
+          outlineWidth: 0,
           outlineColor: "#ffffff",
           oilFilmEnabled: false,
-          isCutout,
+          isCutout: false,
         };
 
         await saveStickerRecord(sticker);
@@ -509,11 +670,7 @@ export function SimpleStickerCanvas() {
             ),
           650,
         );
-        setNotice(
-          cutoutError
-            ? `Original added — cutout failed: ${cutoutError}`
-            : "",
-        );
+        setNotice("Photo added — use Cutout when ready");
       } catch (error) {
         if (createdUrl) {
           URL.revokeObjectURL(createdUrl);
@@ -535,14 +692,17 @@ export function SimpleStickerCanvas() {
   const startStickerGesture = useCallback(
     (
       event: ReactPointerEvent<HTMLElement>,
-      sticker: CanvasSticker,
+      sticker: CanvasElement,
       kind: StickerGestureKind,
     ) => {
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
       const rect = viewportRef.current?.getBoundingClientRect();
-      if (!rect) return;
+      const element = event.currentTarget.closest<HTMLElement>(
+        "[data-sticker], [data-canvas-element]",
+      );
+      if (!rect || !element) return;
       const currentView = viewRef.current;
       const centerX =
         rect.left +
@@ -564,6 +724,7 @@ export function SimpleStickerCanvas() {
         kind,
         pointerId: event.pointerId,
         itemId: sticker.id,
+        element,
         startClientX: event.clientX,
         startClientY: event.clientY,
         centerX,
@@ -577,6 +738,7 @@ export function SimpleStickerCanvas() {
           event.clientX - centerX,
         ),
         start: lifted,
+        latest: lifted,
       };
       event.currentTarget.setPointerCapture(event.pointerId);
     },
@@ -584,72 +746,84 @@ export function SimpleStickerCanvas() {
   );
 
   const moveStickerGesture = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
+    (sample: PointerSample) => {
       const gesture = gestureRef.current;
-      if (!gesture || gesture.pointerId !== event.pointerId) return;
-      event.preventDefault();
+      if (!gesture || gesture.pointerId !== sample.pointerId) return;
+      let latest: CanvasElement;
       if (gesture.kind === "move") {
-        updateSticker(gesture.itemId, {
+        latest = {
+          ...gesture.start,
           x:
             gesture.start.x +
-            (event.clientX - gesture.startClientX) / viewRef.current.zoom,
+            (sample.clientX - gesture.startClientX) / viewRef.current.zoom,
           y:
             gesture.start.y +
-            (event.clientY - gesture.startClientY) / viewRef.current.zoom,
-        });
-        return;
-      }
-      if (gesture.kind === "resize") {
+            (sample.clientY - gesture.startClientY) / viewRef.current.zoom,
+        };
+      } else if (gesture.kind === "resize") {
         const distance = Math.max(
           1,
           Math.hypot(
-            event.clientX - gesture.centerX,
-            event.clientY - gesture.centerY,
+            sample.clientX - gesture.centerX,
+            sample.clientY - gesture.centerY,
           ),
         );
         const factor = clamp(distance / gesture.startDistance, 0.18, 8);
-        updateSticker(gesture.itemId, {
+        latest = {
+          ...gesture.start,
           width: gesture.start.width * factor,
           height: gesture.start.height * factor,
-        });
-        return;
+        };
+      } else {
+        const angle = Math.atan2(
+          sample.clientY - gesture.centerY,
+          sample.clientX - gesture.centerX,
+        );
+        latest = {
+          ...gesture.start,
+          rotation:
+            gesture.start.rotation +
+            ((angle - gesture.startAngle) * 180) / Math.PI,
+        };
       }
-      const angle = Math.atan2(
-        event.clientY - gesture.centerY,
-        event.clientX - gesture.centerX,
-      );
-      updateSticker(gesture.itemId, {
-        rotation:
-          gesture.start.rotation +
-          ((angle - gesture.startAngle) * 180) / Math.PI,
-      });
+      gesture.latest = latest;
+      previewSticker(gesture.element, latest);
     },
-    [updateSticker],
+    [],
   );
 
   const finishStickerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       const gesture = gestureRef.current;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
+      moveStickerGesture({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerId: event.pointerId,
+      });
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      pointerSampleRef.current = null;
       gestureRef.current = null;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
-      const sticker = stickersRef.current.find(
-        (item) => item.id === gesture.itemId,
+      const next = stickersRef.current.map((item) =>
+        item.id === gesture.itemId ? gesture.latest : item,
       );
-      if (sticker) {
-        void saveStickerRecord(sticker).catch(() =>
-          setNotice("Save failed"),
-        );
-        pushHistory(stickersRef.current);
-      }
+      replaceStickers(next, false);
+      void saveStickerRecord(gesture.latest).catch(() =>
+        setNotice("Save failed"),
+      );
+      pushHistory(next);
     },
-    [pushHistory],
+    [moveStickerGesture, pushHistory, replaceStickers],
   );
 
   const deleteSticker = useCallback(
-    (sticker: CanvasSticker) => {
+    (sticker: CanvasElement) => {
       if (saveTimerRef.current[sticker.id]) {
         window.clearTimeout(saveTimerRef.current[sticker.id]);
         delete saveTimerRef.current[sticker.id];
@@ -657,14 +831,255 @@ export function SimpleStickerCanvas() {
       void removeStickerRecord(sticker.id)
         .then(() => {
           selectSticker(null);
+          setEditingId((current) =>
+            current === sticker.id ? null : current,
+          );
           replaceStickers((current) =>
             current.filter((item) => item.id !== sticker.id),
           );
-          window.setTimeout(() => URL.revokeObjectURL(sticker.url), 0);
+          if (sticker.type === "image") {
+            window.setTimeout(() => URL.revokeObjectURL(sticker.url), 0);
+          }
         })
         .catch(() => setNotice("Delete failed"));
     },
     [replaceStickers, selectSticker],
+  );
+
+  const startElementEditing = useCallback(
+    (id: string) => {
+      selectSticker(id);
+      setEditingId(id);
+      setActiveTool("select");
+    },
+    [selectSticker],
+  );
+
+  const commitElementText = useCallback(
+    (id: string, text: string) => {
+      const current = stickersRef.current.find(
+        (element) => element.id === id,
+      );
+      if (!current || current.type !== "text") {
+        setEditingId(null);
+        return;
+      }
+      if (!text.trim()) {
+        deleteSticker(current);
+        return;
+      }
+      const updated = { ...current, text } as CanvasTextElement;
+      replaceStickers((elements) =>
+        elements.map((element) =>
+          element.id === id ? updated : element,
+        ),
+      );
+      setEditingId(null);
+      void saveStickerRecord(updated).catch(() =>
+        setNotice("Save failed"),
+      );
+    },
+    [deleteSticker, replaceStickers],
+  );
+
+  const cancelElementEditing = useCallback(
+    (id: string) => {
+      const current = stickersRef.current.find(
+        (element) => element.id === id,
+      );
+      setEditingId(null);
+      if (current?.type === "text" && !current.text.trim()) {
+        deleteSticker(current);
+      }
+    },
+    [deleteSticker],
+  );
+
+  const createTextElement = useCallback(
+    (clientX: number, clientY: number) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const currentView = viewRef.current;
+      const x =
+        currentView.x +
+        (clientX - rect.left - rect.width / 2) / currentView.zoom;
+      const y =
+        currentView.y +
+        (clientY - rect.top - rect.height / 2) / currentView.zoom;
+      const topZ = stickersRef.current.reduce(
+        (largest, element) => Math.max(largest, element.zIndex),
+        0,
+      );
+      const base = {
+        id: crypto.randomUUID(),
+        x,
+        y,
+        rotation: 0,
+        zIndex: topZ + 1,
+        createdAt: Date.now(),
+      };
+      const element: CanvasTextElement = {
+        ...base,
+        type: "text",
+        width: 280 / currentView.zoom,
+        height: 72 / currentView.zoom,
+        text: "",
+        fontSize: 32 / currentView.zoom,
+        fontWeight: 600,
+        color: "#29251f",
+        backgroundColor: "transparent",
+        borderColor: "#2d2923",
+        borderWidth: 0,
+        borderRadius: 8 / currentView.zoom,
+        textAlign: "left",
+      };
+
+      replaceStickers((elements) => [...elements, element]);
+      selectSticker(element.id);
+      setActiveTool("select");
+      setShapeMenuOpen(false);
+      setEditingId(element.id);
+      void saveStickerRecord(element).catch(() =>
+        setNotice("Save failed"),
+      );
+    },
+    [replaceStickers, selectSticker],
+  );
+
+  const startShapeDrawing = useCallback(
+    (
+      event: ReactPointerEvent<HTMLElement>,
+      shape: CanvasShapeKind,
+    ) => {
+      if (event.button !== 0) return;
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      event.preventDefault();
+      const currentView = viewRef.current;
+      const startX =
+        currentView.x +
+        (event.clientX - rect.left - rect.width / 2) / currentView.zoom;
+      const startY =
+        currentView.y +
+        (event.clientY - rect.top - rect.height / 2) / currentView.zoom;
+      const topZ = stickersRef.current.reduce(
+        (largest, element) => Math.max(largest, element.zIndex),
+        0,
+      );
+      const element: CanvasShapeElement = {
+        id: crypto.randomUUID(),
+        type: "shape",
+        shape,
+        x: startX,
+        y: startY,
+        width: 1 / currentView.zoom,
+        height: shape === "line" ? 14 / currentView.zoom : 1 / currentView.zoom,
+        rotation: 0,
+        zIndex: topZ + 1,
+        createdAt: Date.now(),
+        fillColor: "#f3ead8",
+        fillEnabled: false,
+        strokeColor: "#2d2923",
+        strokeWidth: 2 / currentView.zoom,
+      };
+      replaceStickers((elements) => [...elements, element], false);
+      selectSticker(element.id);
+      setEditingId(null);
+      setDrawingId(element.id);
+      shapeDrawingRef.current = {
+        pointerId: event.pointerId,
+        itemId: element.id,
+        startX,
+        startY,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        start: element,
+        latest: element,
+        element: null,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [replaceStickers, selectSticker],
+  );
+
+  const moveShapeDrawing = useCallback((sample: PointerSample) => {
+    const drawing = shapeDrawingRef.current;
+    if (!drawing || drawing.pointerId !== sample.pointerId) return;
+    const zoom = viewRef.current.zoom;
+    const deltaX = (sample.clientX - drawing.startClientX) / zoom;
+    const deltaY = (sample.clientY - drawing.startClientY) / zoom;
+    let latest: CanvasShapeElement;
+    if (drawing.start.shape === "line") {
+      const length = Math.max(1 / zoom, Math.hypot(deltaX, deltaY));
+      latest = {
+        ...drawing.start,
+        x: drawing.startX + deltaX / 2,
+        y: drawing.startY + deltaY / 2,
+        width: length,
+        height: Math.max(14 / zoom, drawing.start.strokeWidth * 4),
+        rotation: (Math.atan2(deltaY, deltaX) * 180) / Math.PI,
+      };
+    } else {
+      latest = {
+        ...drawing.start,
+        x: drawing.startX + deltaX / 2,
+        y: drawing.startY + deltaY / 2,
+        width: Math.max(1 / zoom, Math.abs(deltaX)),
+        height: Math.max(1 / zoom, Math.abs(deltaY)),
+      };
+    }
+    drawing.latest = latest;
+    drawing.element ??= document.querySelector<HTMLElement>(
+      `[data-element-id="${drawing.itemId}"]`,
+    );
+    if (drawing.element) previewSticker(drawing.element, latest);
+  }, []);
+
+  const finishShapeDrawing = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      const drawing = shapeDrawingRef.current;
+      if (!drawing || drawing.pointerId !== event.pointerId) return;
+      moveShapeDrawing({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerId: event.pointerId,
+      });
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      pointerSampleRef.current = null;
+      shapeDrawingRef.current = null;
+      setDrawingId(null);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      const drawnDistance = Math.hypot(
+        event.clientX - drawing.startClientX,
+        event.clientY - drawing.startClientY,
+      );
+      if (drawnDistance < 6) {
+        replaceStickers(
+          (elements) =>
+            elements.filter((element) => element.id !== drawing.itemId),
+          false,
+        );
+        selectSticker(null);
+      } else {
+        const next = stickersRef.current.map((element) =>
+          element.id === drawing.itemId ? drawing.latest : element,
+        );
+        replaceStickers(next, false);
+        pushHistory(next);
+        void saveStickerRecord(drawing.latest).catch(() =>
+          setNotice("Save failed"),
+        );
+      }
+      setActiveTool("select");
+      setShapeMenuOpen(false);
+    },
+    [moveShapeDrawing, pushHistory, replaceStickers, selectSticker],
   );
 
   const downloadSticker = useCallback((sticker: CanvasSticker) => {
@@ -690,6 +1105,43 @@ export function SimpleStickerCanvas() {
       .catch(() => setNotice("Download failed"));
   }, []);
 
+  const exportCanvas = useCallback(async () => {
+    if (!stickersRef.current.length) {
+      setNotice("Canvas is empty");
+      return;
+    }
+    setIsExporting(true);
+    setNotice("");
+    try {
+      const exported = await exportCanvasToPng(stickersRef.current);
+      const url = URL.createObjectURL(exported.blob);
+      const anchor = document.createElement("a");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      anchor.href = url;
+      anchor.download = `sticker-canvas-${timestamp}.png`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Canvas export failed",
+      );
+    } finally {
+      setIsExporting(false);
+    }
+  }, []);
+
+  const downloadCanvas = useCallback(() => {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLTextAreaElement) {
+      activeElement.blur();
+      window.setTimeout(() => void exportCanvas(), 0);
+      return;
+    }
+    void exportCanvas();
+  }, [exportCanvas]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
@@ -701,6 +1153,9 @@ export function SimpleStickerCanvas() {
       }
 
       if (event.key === "Escape") {
+        setActiveTool("select");
+        setShapeMenuOpen(false);
+        setEditingId(null);
         selectSticker(null);
         return;
       }
@@ -719,6 +1174,26 @@ export function SimpleStickerCanvas() {
         event.preventDefault();
         redo();
         return;
+      }
+
+      if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+        const toolByKey: Partial<Record<string, CanvasTool>> = {
+          t: "text",
+          r: "rectangle",
+          o: "ellipse",
+          g: "triangle",
+          d: "diamond",
+          l: "line",
+          v: "select",
+        };
+        const tool = toolByKey[event.key.toLowerCase()];
+        if (tool) {
+          event.preventDefault();
+          setActiveTool(tool);
+          setShapeMenuOpen(false);
+          if (tool === "select") setEditingId(null);
+          return;
+        }
       }
 
       if (
@@ -763,7 +1238,27 @@ export function SimpleStickerCanvas() {
   }, [deleteSticker, undo, redo, updateSticker, selectSticker]);
 
   const startViewportPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    if (
+      editingId &&
+      !(event.target as HTMLElement).closest("textarea[aria-label='Edit text']")
+    ) {
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLTextAreaElement) {
+        activeElement.blur();
+      } else {
+        setEditingId(null);
+      }
+    }
     if ((event.target as Element).closest("[data-canvas-ui]")) return;
+    if (activeTool === "text" && event.button === 0) {
+      event.preventDefault();
+      createTextElement(event.clientX, event.clientY);
+      return;
+    }
+    if (isShapeTool(activeTool) && event.button === 0) {
+      startShapeDrawing(event, activeTool);
+      return;
+    }
 
     if (event.pointerType === "touch") {
       event.preventDefault();
@@ -802,7 +1297,9 @@ export function SimpleStickerCanvas() {
     }
     if (
       event.button !== 0 ||
-      (event.target as HTMLElement).closest("[data-sticker]")
+      (event.target as HTMLElement).closest(
+        "[data-sticker], [data-canvas-element]",
+      )
     ) {
       return;
     }
@@ -859,21 +1356,30 @@ export function SimpleStickerCanvas() {
 
   const moveGlobalPointer = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      const clientX = event.clientX;
-      const clientY = event.clientY;
-      const pointerId = event.pointerId;
-
+      pointerSampleRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        pointerId: event.pointerId,
+      };
       if (rafRef.current) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
-        if (gestureRef.current) {
-          moveStickerGesture({ clientX, clientY, pointerId, preventDefault: () => {} } as unknown as ReactPointerEvent<HTMLElement>);
+        const sample = pointerSampleRef.current;
+        pointerSampleRef.current = null;
+        if (!sample) return;
+        if (shapeDrawingRef.current) {
+          moveShapeDrawing(sample);
+        } else if (gestureRef.current) {
+          moveStickerGesture(sample);
         } else {
-          moveViewportPointer({ clientX, clientY, pointerId, preventDefault: () => {} } as unknown as ReactPointerEvent<HTMLElement>);
+          moveViewportPointer({
+            ...sample,
+            preventDefault: () => {},
+          } as unknown as ReactPointerEvent<HTMLElement>);
         }
       });
     },
-    [moveStickerGesture, moveViewportPointer],
+    [moveShapeDrawing, moveStickerGesture, moveViewportPointer],
   );
 
   const finishViewportPointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -893,13 +1399,15 @@ export function SimpleStickerCanvas() {
 
   const finishGlobalPointer = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
-      if (gestureRef.current) {
+      if (shapeDrawingRef.current) {
+        finishShapeDrawing(event);
+      } else if (gestureRef.current) {
         finishStickerGesture(event);
       } else {
         finishViewportPointer(event);
       }
     },
-    [finishStickerGesture, finishViewportPointer],
+    [finishShapeDrawing, finishStickerGesture, finishViewportPointer],
   );
 
   const handleWheel = (event: ReactWheelEvent<HTMLElement>) => {
@@ -932,11 +1440,11 @@ export function SimpleStickerCanvas() {
     "--grid-x": `${-view.x * view.zoom}px`,
     "--grid-y": `${-view.y * view.zoom}px`,
   } as CSSProperties;
-
   return (
     <main
       ref={viewportRef}
       className="simple-sticker-canvas"
+      data-active-tool={activeTool}
       onPointerDown={startViewportPointer}
       onPointerMove={moveGlobalPointer}
       onPointerUp={finishGlobalPointer}
@@ -945,31 +1453,60 @@ export function SimpleStickerCanvas() {
     >
       <div className="simple-canvas-grid" style={gridStyle} />
       <div className="simple-sticker-world" style={worldStyle}>
-        {stickers.map((sticker) => (
-          <StickerCanvasItem
-            key={sticker.id}
-            sticker={sticker}
-            selected={selectedId === sticker.id}
-            entering={enteringId === sticker.id}
-            isProcessing={processingStickerId === sticker.id}
-            onGestureStart={startStickerGesture}
-            onDelete={deleteSticker}
-            onDownload={downloadSticker}
-            onCutout={cutoutSticker}
-            onUpdateStyle={updateStickerStyle}
-            onSelect={selectSticker}
-          />
-        ))}
+        {stickers.map((sticker) =>
+          sticker.type === "image" ? (
+            <StickerCanvasItem
+              key={sticker.id}
+              sticker={sticker}
+              selected={selectedId === sticker.id}
+              entering={enteringId === sticker.id}
+              isProcessing={processingStickerId === sticker.id}
+              onGestureStart={startStickerGesture}
+              onDelete={deleteSticker}
+              onDownload={downloadSticker}
+              onCutout={cutoutSticker}
+              onUpdateStyle={updateStickerStyle}
+              onSelect={selectSticker}
+            />
+          ) : (
+            <CanvasElementItem
+              key={sticker.id}
+              element={sticker}
+              selected={selectedId === sticker.id}
+              editing={editingId === sticker.id}
+              drawing={drawingId === sticker.id}
+              onGestureStart={startStickerGesture}
+              onSelect={selectSticker}
+              onDelete={deleteSticker}
+              onStartEditing={startElementEditing}
+              onCommitText={commitElementText}
+              onCancelEditing={cancelElementEditing}
+              onStyleChange={updateCanvasElementProperties}
+            />
+          ),
+        )}
       </div>
 
-      {!stickers.length ? (
-        <p className="simple-empty-hint">Upload a photo</p>
+      {dissolveEffect ? (
+        <BackgroundDissolveEffect
+          effect={dissolveEffect}
+          onReady={commitPendingCutout}
+          onComplete={finishDissolveEffect}
+        />
       ) : null}
 
-      {isImporting ? (
+      {!stickers.length ? (
+        <p className="simple-empty-hint">
+          Add an image or text, or drag to draw a shape
+        </p>
+      ) : null}
+
+      {isImporting || isExporting ? (
         <div className="simple-processing" role="status" aria-live="polite">
           <span className="simple-processing-spinner" aria-hidden="true" />
-          <strong>{notice || "Creating sticker…"}</strong>
+          <strong>
+            {notice || (isExporting ? "Exporting canvas…" : "Creating sticker…")}
+          </strong>
         </div>
       ) : notice ? (
         <button
@@ -983,29 +1520,36 @@ export function SimpleStickerCanvas() {
         </button>
       ) : null}
 
-      <nav
-        className="simple-floating-actions"
-        aria-label="Add sticker"
-        data-canvas-ui
-      >
-        <button
-          type="button"
-          onClick={() => uploadInputRef.current?.click()}
-          disabled={isImporting || Boolean(processingStickerId)}
-        >
-          <Icon name="image" />
-          <span>Upload</span>
-        </button>
-        <button
-          type="button"
-          className="simple-camera-button"
-          onClick={() => setCameraOpen(true)}
-          disabled={isImporting || Boolean(processingStickerId)}
-        >
-          <Icon name="camera" />
-          <span>Camera</span>
-        </button>
-      </nav>
+      <CanvasBottomToolbar
+        activeTool={activeTool}
+        disabled={isImporting || isExporting || Boolean(processingStickerId)}
+        shapeMenuOpen={shapeMenuOpen}
+        onUpload={() => {
+          setActiveTool("select");
+          setShapeMenuOpen(false);
+          uploadInputRef.current?.click();
+        }}
+        onCamera={() => {
+          setActiveTool("select");
+          setShapeMenuOpen(false);
+          setCameraOpen(true);
+        }}
+        onDownloadCanvas={() => {
+          setActiveTool("select");
+          setShapeMenuOpen(false);
+          downloadCanvas();
+        }}
+        onSelectTool={(tool) => {
+          setActiveTool(tool);
+          setShapeMenuOpen(false);
+          setEditingId(null);
+          selectSticker(null);
+        }}
+        onToggleShapeMenu={() => {
+          setShapeMenuOpen((current) => !current);
+          setEditingId(null);
+        }}
+      />
 
       <input
         ref={uploadInputRef}
