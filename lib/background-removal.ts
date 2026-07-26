@@ -4,7 +4,6 @@ export type BackgroundRemovalProgress = {
 };
 
 export type BackgroundRemovalResult = {
-  dataUrl: string;
   pixels: Uint8ClampedArray;
   width: number;
   height: number;
@@ -36,22 +35,11 @@ let worker: Worker | null = null;
 let requestId = 0;
 const pending = new Map<number, PendingRequest>();
 
-function pixelsToDataUrl(
-  pixels: Uint8ClampedArray,
-  width: number,
-  height: number,
-) {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is unavailable");
-  const imageDataPixels: Uint8ClampedArray<ArrayBuffer> = new Uint8ClampedArray(
-    pixels.length,
-  );
-  imageDataPixels.set(pixels);
-  context.putImageData(new ImageData(imageDataPixels, width, height), 0, 0);
-  return canvas.toDataURL("image/png");
+function resetWorker() {
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
 }
 
 function getWorker() {
@@ -73,6 +61,7 @@ function getWorker() {
     }
     pending.delete(response.id);
     if (response.type === "error") {
+      resetWorker();
       request.reject(new Error(response.message));
       return;
     }
@@ -82,7 +71,6 @@ function getWorker() {
         pixels,
         width: response.width,
         height: response.height,
-        dataUrl: pixelsToDataUrl(pixels, response.width, response.height),
       });
     } catch (error) {
       request.reject(
@@ -94,46 +82,76 @@ function getWorker() {
     const error = new Error(event.message || "Background removal worker failed");
     for (const request of pending.values()) request.reject(error);
     pending.clear();
-    worker?.terminate();
-    worker = null;
+    resetWorker();
   });
   return worker;
 }
 
-async function normalizeImageSource(source: string) {
-  const image = new Image();
-  image.decoding = "async";
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("The source image could not be decoded"));
-    image.src = source;
-  });
+async function normalizeImageSource(source: string | Blob) {
+  let image: CanvasImageSource;
+  let naturalWidth: number;
+  let naturalHeight: number;
+  let cleanup = () => {};
 
-  const naturalWidth = image.naturalWidth || image.width;
-  const naturalHeight = image.naturalHeight || image.height;
-  if (!naturalWidth || !naturalHeight) {
-    throw new Error("The source image has no visible dimensions");
+  if (source instanceof Blob && "createImageBitmap" in globalThis) {
+    const bitmap = await createImageBitmap(source);
+    image = bitmap;
+    naturalWidth = bitmap.width;
+    naturalHeight = bitmap.height;
+    cleanup = () => bitmap.close();
+  } else {
+    const element = new Image();
+    element.decoding = "async";
+    const temporaryUrl =
+      source instanceof Blob ? URL.createObjectURL(source) : null;
+    await new Promise<void>((resolve, reject) => {
+      element.onload = () => resolve();
+      element.onerror = () =>
+        reject(new Error("The source image could not be decoded"));
+      element.src =
+        typeof source === "string" ? source : (temporaryUrl as string);
+    });
+    image = element;
+    naturalWidth = element.naturalWidth || element.width;
+    naturalHeight = element.naturalHeight || element.height;
+    cleanup = () => {
+      if (temporaryUrl) URL.revokeObjectURL(temporaryUrl);
+    };
   }
-  const maximumSide = 4096;
-  const scale = Math.min(1, maximumSide / Math.max(naturalWidth, naturalHeight));
-  const width = Math.max(1, Math.round(naturalWidth * scale));
-  const height = Math.max(1, Math.round(naturalHeight * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas is unavailable");
-  context.drawImage(image, 0, 0, width, height);
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => blob ? resolve(blob) : reject(new Error("Could not prepare the image")),
-      "image/png",
+
+  try {
+    if (!naturalWidth || !naturalHeight) {
+      throw new Error("The source image has no visible dimensions");
+    }
+    const maximumSide = 2048;
+    const scale = Math.min(
+      1,
+      maximumSide / Math.max(naturalWidth, naturalHeight),
     );
-  });
+    const width = Math.max(1, Math.round(naturalWidth * scale));
+    const height = Math.max(1, Math.round(naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas is unavailable");
+    context.drawImage(image, 0, 0, width, height);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) =>
+          blob
+            ? resolve(blob)
+            : reject(new Error("Could not prepare the image")),
+        "image/png",
+      );
+    });
+  } finally {
+    cleanup();
+  }
 }
 
 export async function removeImageBackground(
-  source: string,
+  source: string | Blob,
   onProgress?: (progress: BackgroundRemovalProgress) => void,
 ) {
   const blob = await normalizeImageSource(source);

@@ -1,0 +1,23 @@
+{
+  "name": "Sticker Canvas",
+  "short_name": "Stickers",
+  "description": "Turn photos into stickers on an infinite canvas.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f0e5",
+  "theme_color": "#f4f0e5",
+  "icons": [
+    {
+      "src": "./apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "./sticker-canvas-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

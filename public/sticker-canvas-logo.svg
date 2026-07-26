@@ -1,0 +1,28 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 512 512"
+  role="img"
+  aria-label="Sticker Canvas logo"
+>
+  <path
+    d="M76 132h86l26-43h136l26 43h86c29 0 52 23 52 52v196c0 29-23 52-52 52H76c-29 0-52-23-52-52V184c0-29 23-52 52-52Z"
+    fill="#fff"
+  />
+  <path
+    d="M81 151h92l26-43h114l26 43h92c20 0 37 17 37 37v169l-58 55H81c-20 0-37-17-37-37V188c0-20 17-37 37-37Z"
+    fill="#292722"
+  />
+  <rect x="79" y="183" width="43" height="43" rx="12" fill="#f4f0e5" />
+  <circle cx="408" cy="203" r="22" fill="#d65a3a" />
+  <path
+    d="M112 286c0-50 69-70 104-29l40 47 40-47c35-41 104-21 104 29s-69 70-104 29l-40-47-40 47c-35 41-104 21-104-29Z"
+    fill="none"
+    stroke="#f4f0e5"
+    stroke-width="38"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="256" cy="286" r="19" fill="#d65a3a" stroke="#fff" stroke-width="8" />
+  <path d="M410 412c15-34 30-45 58-55l-58 55Z" fill="#d8d0c2" />
+  <path d="M410 412h58v-55c-18 30-31 41-58 55Z" fill="#fff" />
+</svg>

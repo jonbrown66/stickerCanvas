@@ -1,24 +1,13 @@
 # Third-Party Notices
 
-## MOV Export
-
-Transparent ProRes 4444 MOV export uses `prores-wasm-encoder`, licensed under
-the MIT License and installed from npm.
-
 ## Local Background Removal
 
-Browser-side inference uses `@huggingface/transformers`, licensed under the
-Apache License 2.0. The background-removal weights are redistributed with this
-project and loaded on demand from the application's own origin. They come from
-`BritishWerewolf/U-2-Netp`, are based on the original U²-Net project, and are
-licensed under the Apache License 2.0. The bundled copy, its license, source
-revision, and checksums are recorded under
-`public/models/BritishWerewolf/U-2-Netp/`.
-
-## Debug Tooling
-
-The optional `?debug=true` parameter panel uses `tweakpane`, licensed under the
-MIT License and loaded on demand.
+Browser-side inference uses `onnxruntime-web`, licensed under the MIT License.
+The background-removal weights are redistributed with this project and loaded
+on demand from the application's own origin. They are a quantized ONNX build of
+the IS-Net general-use model from the DIS project and are licensed under the
+Apache License 2.0. The bundled copy, source revision, and checksum are recorded
+under `public/models/isnet-general-use-onnx/`.
 
 ## HEIC Image Import
 

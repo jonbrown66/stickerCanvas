@@ -1,222 +1,199 @@
-# Sticker Forge
+# Sticker Canvas
 
-Sticker Forge turns text or uploaded image artwork into a tactile WebGL sticker. Grab the
-real die-cut edge, drag it inward, and the sticker curls to reveal a satin back
-surface with depth-aware shadowing.
+一个移动端优先的本地贴纸画布。
 
-The repository contains two deliverables:
+拍照或上传照片后，应用会在浏览器中自动移除背景、裁掉透明边缘、添加白色贴纸轮廓，并把生成的静态贴纸放入无限画布。照片、贴纸和画布状态均保存在当前浏览器，不会上传到业务服务器。
 
-- an interactive builder in `app/`;
-- a framework-independent Web Component and imperative API in `lib/`.
+## 快速使用
 
-## Run locally
+### 1. 添加照片
 
-Node.js 22.13 or newer is required.
+页面顶部只有两个主要入口：
+
+- **Upload**：从相册或电脑中选择照片。
+- **Camera**：打开应用内相机；如果当前浏览器不支持，会自动使用系统相机。
+
+支持 JPG、PNG、WebP 和 HEIC，单张图片最大 20 MB。
+
+### 2. 等待自动生成贴纸
+
+选择照片后无需手动操作，应用会依次完成：
+
+1. 本地自动抠图。
+2. 裁剪透明区域。
+3. 添加白色贴纸轮廓。
+4. 将贴纸放到当前画布中心。
+5. 自动保存到本机浏览器。
+
+第一次使用抠图功能时，需要加载本地 AI 模型和运行资源，因此会比后续处理慢。模型被浏览器缓存后，再次使用会更快。
+
+### 3. 编辑贴纸
+
+点击或轻触贴纸后，可以使用贴纸周围的控制点与浮动工具栏：
+
+| 操作 | 鼠标 | 触摸屏 |
+| --- | --- | --- |
+| 选中贴纸 | 单击贴纸 | 轻触贴纸 |
+| 移动贴纸 | 拖动贴纸 | 单指拖动贴纸 |
+| 等比缩放 | 拖动右上角、左下角或右下角圆角折线控制点 | 拖动右上角、左下角或右下角圆角折线控制点 |
+| 旋转 | 拖动左上角旋转图标控制点 | 拖动左上角旋转图标控制点 |
+| 特效与偏好 | 选中贴纸后右侧自动弹出 Pop-In 竖向浮动工具栏（支持描边粗细、颜色、镭射流光） | 选中贴纸后右侧自动弹出 Pop-In 竖向浮动工具栏 |
+| 删除 | 在浮动工具栏中点击 Delete，或按 `Delete` / `Backspace` | 在浮动工具栏中轻触 Delete |
+| 下载 PNG | 在浮动工具栏中点击 Save 图标按钮 | 在浮动工具栏中轻触 Save 图标按钮 |
+| 取消选中 | 点击画布空白处 | 轻触画布空白处 |
+
+### 4. 操作无限画布
+
+| 操作 | 鼠标 | 触摸屏 |
+| --- | --- | --- |
+| 平移画布 | 拖动画布空白处 | 单指拖动画布空白处 |
+| 缩放画布 | 鼠标滚轮 | 双指捏合 |
+
+首次打开应用时，画布中会显示一张示例贴纸，可以直接用它熟悉移动、缩放、旋转和删除操作。
+
+## 相机权限
+
+- 应用内相机只能在 **HTTPS** 或 `localhost` 环境中使用。
+- 第一次拍照时，浏览器会询问相机权限，请选择允许。
+- 如果权限被拒绝，需要在浏览器的网站权限设置中重新开启。
+- 如果应用内相机不可用，应用会回退到系统相机或文件选择器。
+- 在手机上测试相机，推荐使用已部署的 HTTPS 地址；普通局域网 HTTP 地址通常无法获得相机权限。
+
+## 数据保存与隐私
+
+- 抠图模型位于 `public/models/`，通过 Web Worker 在浏览器本地运行。
+- 原始照片不会发送到应用服务器。
+- 生成后的贴纸图片保存在 IndexedDB。
+- 贴纸位置、大小、角度和画布视口会自动保存在本机。
+- 移动、缩放或旋转结束后会自动保存，不需要手动点击保存。
+- 数据不会自动同步到其他设备或浏览器。
+- 清除该网站的浏览器数据，会同时删除已经保存的贴纸和画布状态。
+
+## 获得更好的抠图效果
+
+- 尽量选择主体清晰、光线充足的照片。
+- 主体和背景颜色差异越明显，抠图效果通常越稳定。
+- 避免主体过小、严重模糊或被大面积遮挡。
+- 超大照片会在本地缩放后处理，以兼顾速度和内存占用。
+
+## 安装为桌面应用
+
+项目包含 PWA 元数据和同源静态资源缓存。使用支持的浏览器打开部署地址后，可以通过浏览器菜单中的“安装应用”或“添加到主屏幕”保存入口。
+
+首次加载页面和首次使用 AI 抠图时需要网络。页面和已经请求过的模型资源成功缓存后，可以离线重新打开并继续使用；浏览器存储空间不足或用户清除网站数据时，需要重新联网加载。
+
+## 本地开发
+
+### 环境要求
+
+- Node.js 22.13 或更高版本
+- npm
+
+### 启动项目
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-Build the hosted app and both reusable library bundles with:
+根据终端提示打开本地地址，通常为：
 
-```bash
-npm run build
+```text
+http://localhost:5173
 ```
 
-The reusable files are emitted to `public/embed/`:
+### 常用命令
 
-- `sticker-forge.es.js` — an ES module that auto-registers `<sticker-forge>`;
-- `sticker-forge.iife.js` — a classic script exposing `window.StickerForge`;
-- `sticker-forge.d.ts` — public TypeScript declarations.
-
-## GitHub Pages
-
-Pushes to `main` deploy a static export through the GitHub Pages workflow at
-`.github/workflows/deploy-pages.yml`. Build the same artifact locally with:
-
-```bash
-npm run build:pages
-```
-
-The production Pages site uses `https://sticker.oooo.so`. Its DNS record is a
-`CNAME` for the `sticker` subdomain pointing to `catsjuice.github.io`.
-
-The provided peel sound is trimmed, converted to mono, lightly high-passed, and
-inlined into both JavaScript bundles, so it does not need to be copied or hosted
-as a separate asset. The untouched source recording remains in `lib/assets/`.
-
-## Copy-paste Web Component
-
-Copy both the ES bundle and this markup into any page. The bundle registers the
-element automatically; the idempotent `defineStickerForge()` helper is also
-exported and returns immediately (`void`).
-
-```html
-<script type="module" src="/embed/sticker-forge.es.js"></script>
-
-<sticker-forge
-  id="sticker"
-  style="display:block;width:640px;height:420px"
-></sticker-forge>
-
-<script type="module">
-  await customElements.whenDefined("sticker-forge");
-  const sticker = document.querySelector("#sticker");
-
-  sticker.setOptions({
-    outline: { width: 18, color: "#ffffff" },
-    shadow: { opacity: 0.22, blur: 22, distance: 16, angle: 42 },
-    peel: {
-      radius: 0.12,
-      stiffness: 0.72,
-      maxAngle: 3.55,
-      release: "reset",
-    },
-    sound: { enabled: true, volume: 0.68 },
-    back: { color: "#f7f5f2", gloss: 0.7, roughness: 0.3 },
-    tilt: -3,
-  });
-
-  // setSource() is async: the promise settles after the texture is ready.
-  await sticker.setSource({
-    type: "text",
-    text: "PEEL ME",
-    color: "#19191d",
-    fontFamily: "Arial Rounded MT Bold, Arial Black, sans-serif",
-    fontWeight: 900,
-  });
-
-  sticker.addEventListener("peelchange", (event) => {
-    console.log("peel", event.detail.progress);
-  });
-</script>
-```
-
-See [`examples/embed.html`](examples/embed.html) for a complete standalone page.
-
-## Imperative JavaScript API
-
-If a custom element does not fit the host framework, mount the renderer into a
-normal element. `createSticker()` is asynchronous and resolves to the control
-object; renderer events are dispatched from the target element.
-
-```html
-<div id="sticker-target" style="width:640px;height:420px"></div>
-
-<script type="module">
-  import { createSticker } from "/embed/sticker-forge.es.js";
-
-  const target = document.querySelector("#sticker-target");
-  target.addEventListener("peelend", (event) => {
-    console.log("released at", event.detail.progress);
-  });
-
-  const sticker = await createSticker(target, {
-    source: { type: "text", text: "PEEL ME", color: "#19191d" },
-    peel: { radius: 0.12, maxAngle: 3.55 },
-    sound: { enabled: true, volume: 0.68 },
-  });
-
-  // Call before permanently removing the target in an SPA.
-  // sticker.destroy();
-</script>
-```
-
-For classic scripts, load `sticker-forge.iife.js` and call
-`await StickerForge.createSticker(...)`, as demonstrated by the standalone
-example.
-
-## Inputs
-
-Text sources accept `text`, `color`, `fontFamily`, and `fontWeight`. The engine
-waits for the requested browser font before rebuilding the texture.
-
-Image sources accept any browser-decodable image URL, including data URLs made
-from PNG, WebP, JPEG, GIF, AVIF, or SVG uploads:
-
-```js
-await sticker.setSource({ type: "image", src: imageDataUrl, name: file.name });
-```
-
-The engine inspects decoded pixel alpha. Transparent images use their alpha
-silhouette for the die-cut outline; fully opaque images use their rectangular
-image boundary.
-
-Legacy SVG sources also accept raw markup; pre-sanitization is not required:
-
-```js
-await sticker.setSource({ type: "svg", svg: svgMarkup });
-```
-
-SVG input is processed locally. The library always removes scripts, event
-attributes, `foreignObject`, and external URL references before rasterization.
-`sanitizeSvgMarkup(svgMarkup)` is exported when the sanitized markup itself is
-needed.
-
-## API
-
-The custom element and the object returned by the awaited `createSticker()`
-promise expose the same control surface:
-
-```ts
-setSource(source): Promise<void>
-setOptions(partialOptions): void
-reset(): void
-resize(): void
-getState(): StickerState
-destroy(): void
-```
-
-For the imperative API, listen on the target element passed to
-`createSticker()`. For the Web Component, listen on `<sticker-forge>`; its peel
-and error events bubble across the shadow boundary.
-
-| Event | `event.detail` |
+| 命令 | 作用 |
 | --- | --- |
-| `ready` | Imperative target: `{ width, height }`; Web Component: no detail |
-| `peelstart` | `{ amount, progress, origin }` |
-| `peelchange` | `{ amount, progress, direction? }` |
-| `peelend` | `{ amount, progress, willReset }` |
-| `error` | `{ message }` |
+| `npm run dev` | 启动 Vite 开发服务器 |
+| `npm run typecheck` | 运行 TypeScript 类型检查 |
+| `npm run lint` | 运行 ESLint |
+| `npm test` | 执行完整构建和自动化测试 |
+| `npm run build` | 生成生产版本 |
+| `npm run build:pages` | 生成 GitHub Pages 静态版本 |
+| `npm run start` | 本地预览生产构建 |
 
-`amount` and `progress` are the same normalized value from `0` (flat) to `1`
-(fully lifted). `origin` and `direction` are `{ x, y }` points in sticker-local
-coordinates.
+生产构建输出在 `dist/` 目录，可部署到 GitHub Pages、Cloudflare Pages 或其他静态托管服务。
 
-`peel.radius` is normalized to the sticker's short side (`0.12` means 12%),
-while `peel.maxAngle` is expressed in radians. Shadow direction and `tilt` are
-expressed in degrees; shadow blur/distance use CSS pixels, while
-`peel.grabWidth` uses CSS pixels at 100% scale and scales with the sticker.
+## 技术栈
 
-The bundled recording is treated as an audio sprite rather than a timeline.
-Sticker Forge separates its lift, light crackle, strong tear, and release
-material, compensates their different levels, and drives randomized grains from
-the drag velocity and acceleration. A slow peel is sparse, a fast peel is denser
-and brighter, holding still is silent, and reattaching uses a quieter low-passed
-texture instead of reversed audio. `progress` is used only for the initial lift
-and final release events. Set `sound.enabled` to `false` or `sound.volume` to `0`
-to mute it. Provide `sound.src` to replace the bundled sound with another
-browser-decodable audio URL; custom recordings use a duration-relative generic
-slice profile.
+- React 19
+- Vite 8
+- TypeScript
+- ONNX Runtime Web / WASM
+- Web Workers
+- Canvas API
+- IndexedDB + localStorage
 
-`setOptions()` deep-merges nested option groups. Prefer the awaitable
-`setSource()` when changing artwork; passing `source` through `setOptions()`
-starts the same rebuild but cannot be awaited. `destroy()` should be called
-before a single-page application permanently removes an imperative sticker
-instance. A disconnected `<sticker-forge>` cleans itself up automatically.
+## 项目结构
 
-## Rendering notes
+```text
+app/
+  App.tsx                  应用入口和页面布局
+  CameraCapture.tsx        应用内相机
+  Icon.tsx                 轻量图标组件
+  main.tsx                 Vite 挂载入口
+  SimpleStickerCanvas.tsx  无限画布和本机恢复
+  StickerCanvasItem.tsx    单张贴纸交互
+  globals.css              全局样式和响应式布局
 
-- Three.js manages the WebGL scene, camera, geometry, and depth buffer.
-- Custom shaders keep the attached region rigid and bend only the peel front.
-- Front and back materials render separately according to face orientation.
-- The shadow is projected from the deformed surface instead of being a static
-  box or CSS shadow.
-- Source alpha drives both visual clipping and boundary hit testing, so empty
-  corners of an SVG bounding box cannot be grabbed.
-- Rendering idles when the sticker is flat; DPR and mesh density are capped for
-  predictable mobile performance.
+lib/
+  background-removal.ts         抠图 Worker 客户端
+  canvas-types.ts               共享类型
+  heic.ts                       HEIC 本地解码
+  sticker-image-processing.ts   Alpha 裁剪与贴纸描边
+  sticker-storage.ts            IndexedDB 本地仓储
 
-The measured reference-video timeline and calibration values live in
-[`docs/reference-analysis.md`](docs/reference-analysis.md).
+workers/
+  background-removal.worker.ts  IS-Net 本地推理
+
+public/
+  models/                       本地抠图模型
+  manifest.webmanifest          PWA 元数据
+  sw.js                         离线静态资源缓存
+```
+
+## 核心处理流程
+
+```text
+拍照或上传
+    ↓
+文件格式与大小校验
+    ↓
+HEIC 解码（按需）
+    ↓
+Web Worker 本地 AI 抠图
+    ↓
+透明区域裁剪与白色描边
+    ↓
+放入无限画布
+    ↓
+IndexedDB 自动保存
+```
+
+## 常见问题
+
+### 点击拍照后没有出现相机
+
+确认页面运行在 HTTPS 或 `localhost`，并检查浏览器是否允许该网站使用相机。无法使用应用内相机时，可以通过系统相机入口继续拍照。
+
+### 第一次生成贴纸比较慢
+
+首次抠图需要下载并初始化模型与 WASM 运行资源。后续处理通常会利用浏览器缓存，速度会更快。
+
+### 刷新页面后贴纸没有了
+
+确认没有使用隐私浏览模式，也没有清除网站数据。部分浏览器会主动清理长期未访问站点的本地存储。
+
+### 为什么另一台设备看不到贴纸
+
+当前版本只做本机自动保存，没有账号系统和云同步。不同设备、不同浏览器以及不同域名之间的数据相互独立。
+
+### 抠图边缘不理想
+
+优先使用主体清晰、光线均匀、背景对比明显的照片。当前版本不提供手动擦除或边缘修复工具。
+
+## 当前版本范围
+
+第一版只提供静态贴纸，支持移动、等比缩放、旋转、删除和本机自动保存。暂不包含动态贴纸、文字编辑、手动抠图、协作、云同步和导出排版。
