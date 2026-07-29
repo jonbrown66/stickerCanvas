@@ -3,6 +3,8 @@ import type { ReactNode } from "react";
 interface IconProps {
   name:
     | "camera"
+    | "plus"
+    | "history"
     | "image"
     | "close"
     | "rotate"
@@ -30,6 +32,14 @@ interface IconProps {
 }
 
 const paths: Record<IconProps["name"], ReactNode> = {
+  plus: <path d="M12 5v14M5 12h14" />,
+  history: (
+    <>
+      <path d="M4 12a8 8 0 1 0 2.35-5.65" />
+      <path d="M4 4v5h5" />
+      <path d="M12 8v4l2.75 1.75" />
+    </>
+  ),
   camera: (
     <>
       <path d="M5 7h3l1.4-2h5.2L16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z" />

@@ -62,11 +62,12 @@ test("canvas element types support text styling and five shape kinds without not
   assert.match(source, /fillEnabled: boolean/);
 });
 
-test("storage version 3 migrates legacy stickers and note records", async () => {
+test("storage version 4 keeps legacy migration and adds canvas history storage", async () => {
   const source = await readSource("../lib/sticker-storage.ts");
 
-  assert.match(source, /const DATABASE_VERSION = 3/);
+  assert.match(source, /const DATABASE_VERSION = 4/);
   assert.match(source, /const ELEMENT_STORE = "elements"/);
+  assert.match(source, /const CANVAS_PROJECT_STORE = "canvas-projects"/);
   assert.match(source, /const LEGACY_STICKER_STORE = "stickers"/);
   assert.match(source, /if \(raw\.type === "note"\)/);
   assert.match(source, /type: "text"/);
@@ -141,6 +142,7 @@ test("bottom toolbar exposes icon-only primary entries and five icon-only shape 
   assert.match(source, /id="canvas-shape-menu"/);
   assert.match(source, /<Icon name="image" \/>[\s\S]*?<span>Upload<\/span>/);
   assert.match(source, /<Icon name="shapes" \/>[\s\S]*?<span>Shape<\/span>/);
+  assert.doesNotMatch(source, /Download canvas/);
   assert.match(styles, /\.simple-floating-actions button > span,\s*\.simple-shape-menu button > span[\s\S]*?clip: rect\(0, 0, 0, 0\)/);
 });
 
@@ -273,17 +275,30 @@ test("canvas PNG export keeps the paper dot grid, rotated content margin, and z-
   }
 });
 
-test("canvas download entry clears editing, exposes status, and disables controls while exporting", async () => {
+test("canvas actions keep download independent from the editing toolbar", async () => {
   const canvas = await readSource("../app/SimpleStickerCanvas.tsx");
   const toolbar = await readSource("../app/CanvasBottomToolbar.tsx");
+  const styles = await readSource("../app/globals.css");
 
   assert.match(canvas, /import \{ exportCanvasToPng \} from "@\/lib\/canvas-export"/);
   assert.match(canvas, /const \[isExporting, setIsExporting\] = useState\(false\)/);
   assert.match(canvas, /const exportCanvas = useCallback\(async \(\) => \{[\s\S]*?setIsExporting\(true\)[\s\S]*?await exportCanvasToPng\(stickersRef\.current\)[\s\S]*?finally \{[\s\S]*?setIsExporting\(false\)/);
   assert.match(canvas, /const downloadCanvas = useCallback\(\(\) => \{[\s\S]*?activeElement\.blur\(\)[\s\S]*?exportCanvas\(\)/);
-  assert.match(canvas, /disabled=\{isImporting \|\| isExporting \|\| Boolean\(processingStickerId\)\}/);
-  assert.match(canvas, /isExporting \? "Exporting canvas…" : "Creating sticker…"/);
-  assert.match(canvas, /onDownloadCanvas=\{\(\) => \{[\s\S]*?downloadCanvas\(\)/);
-  assert.match(toolbar, /onDownloadCanvas: \(\) => void/);
-  assert.match(toolbar, /onClick=\{onDownloadCanvas\}[\s\S]*?aria-label="Download canvas"/);
+  assert.match(canvas, /disabled=\{isImporting \|\| isExporting \|\| isCreatingCanvas \|\| Boolean\(processingStickerId\)\}/);
+  assert.match(canvas, /isCreatingCanvas[\s\S]*?"Creating new canvas…"/);
+  assert.match(canvas, /className="simple-canvas-actions"/);
+  assert.match(canvas, /onClick=\{\(\) => void createNewCanvas\(\)\}[\s\S]*?aria-label="New canvas"/);
+  assert.match(canvas, /onClick=\{downloadCanvas\}[\s\S]*?aria-label="Download canvas"/);
+  assert.match(canvas, /saveCanvasProject\(nextProject\)/);
+  assert.match(canvas, /openCanvasProject/);
+  assert.match(canvas, /aria-label="Canvas history"/);
+  assert.match(canvas, /simple-canvas-history-backdrop[\s\S]*?setHistoryOpen\(false\)/);
+  assert.match(canvas, /<Icon name="history" \/>[\s\S]*?<Icon name="plus" \/>/);
+  assert.match(canvas, /replaceStickerRecords\(defaults\)/);
+  assert.doesNotMatch(toolbar, /onDownloadCanvas|Download canvas/);
+  assert.match(styles, /\.simple-canvas-actions[\s\S]*?left: max\(22px/);
+  assert.match(styles, /\.simple-canvas-history[\s\S]*?bottom: max\(80px/);
+  assert.match(styles, /\.simple-canvas-history-backdrop[\s\S]*?inset: 0/);
+  assert.match(styles, /\.simple-canvas-actions button \{[\s\S]*?width: 46px;[\s\S]*?height: 46px;/);
+  assert.match(styles, /\.simple-canvas-actions button > span[\s\S]*?clip: rect\(0, 0, 0, 0\)/);
 });

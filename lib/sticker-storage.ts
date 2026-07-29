@@ -6,9 +6,18 @@ import type {
 import { toCanvasElementRecord } from "./canvas-history";
 
 const DATABASE_NAME = "simple-sticker-canvas";
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const ELEMENT_STORE = "elements";
+const CANVAS_PROJECT_STORE = "canvas-projects";
 const LEGACY_STICKER_STORE = "stickers";
+
+export type CanvasProject = {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  elements: CanvasElementRecord[];
+};
 
 function normalizeRecord(
   value:
@@ -71,6 +80,9 @@ function openDatabase(): Promise<IDBDatabase> {
       const elementStore = database.objectStoreNames.contains(ELEMENT_STORE)
         ? transaction.objectStore(ELEMENT_STORE)
         : database.createObjectStore(ELEMENT_STORE, { keyPath: "id" });
+      if (!database.objectStoreNames.contains(CANVAS_PROJECT_STORE)) {
+        database.createObjectStore(CANVAS_PROJECT_STORE, { keyPath: "id" });
+      }
 
       const elementCursorRequest = elementStore.openCursor();
       elementCursorRequest.onsuccess = () => {
@@ -166,6 +178,48 @@ export async function removeCanvasElementRecord(id: string): Promise<void> {
   try {
     const transaction = database.transaction(ELEMENT_STORE, "readwrite");
     transaction.objectStore(ELEMENT_STORE).delete(id);
+    await transactionDone(transaction);
+  } finally {
+    database.close();
+  }
+}
+
+export async function readCanvasProjects(): Promise<CanvasProject[]> {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(CANVAS_PROJECT_STORE, "readonly");
+    const done = transactionDone(transaction);
+    const request = transaction.objectStore(CANVAS_PROJECT_STORE).getAll();
+    const projects = await new Promise<CanvasProject[]>((resolve, reject) => {
+      request.onsuccess = () =>
+        resolve(
+          (request.result as CanvasProject[]).map((project) => ({
+            ...project,
+            elements: project.elements.map(normalizeRecord),
+          })),
+        );
+      request.onerror = () =>
+        reject(request.error ?? new Error("Canvas history unavailable"));
+    });
+    await done;
+    return projects;
+  } finally {
+    database.close();
+  }
+}
+
+export async function saveCanvasProject(
+  project: Omit<CanvasProject, "elements"> & {
+    elements: readonly (CanvasElementRecord | CanvasElement)[];
+  },
+): Promise<void> {
+  const database = await openDatabase();
+  try {
+    const transaction = database.transaction(CANVAS_PROJECT_STORE, "readwrite");
+    transaction.objectStore(CANVAS_PROJECT_STORE).put({
+      ...project,
+      elements: project.elements.map(toCanvasElementRecord),
+    } satisfies CanvasProject);
     await transactionDone(transaction);
   } finally {
     database.close();

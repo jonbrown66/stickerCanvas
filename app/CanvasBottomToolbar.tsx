@@ -7,7 +7,6 @@ interface CanvasBottomToolbarProps {
   shapeMenuOpen: boolean;
   onUpload: () => void;
   onCamera: () => void;
-  onDownloadCanvas: () => void;
   onSelectTool: (tool: CanvasTool) => void;
   onToggleShapeMenu: () => void;
 }
@@ -18,7 +17,6 @@ export function CanvasBottomToolbar({
   shapeMenuOpen,
   onUpload,
   onCamera,
-  onDownloadCanvas,
   onSelectTool,
   onToggleShapeMenu,
 }: CanvasBottomToolbarProps) {
@@ -139,16 +137,6 @@ export function CanvasBottomToolbar({
       >
         <Icon name="shapes" />
         <span>Shape</span>
-      </button>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onDownloadCanvas}
-        aria-label="Download canvas"
-        title="Download canvas"
-      >
-        <Icon name="download" />
-        <span>Download canvas</span>
       </button>
     </nav>
   );

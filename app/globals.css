@@ -652,6 +652,173 @@ button:focus-visible,
   background: oklch(0.93 0.018 82);
 }
 
+.simple-canvas-actions {
+  position: fixed;
+  z-index: 20;
+  left: max(22px, calc(env(safe-area-inset-left) + 14px));
+  bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px));
+  display: flex;
+  gap: 8px;
+}
+
+.simple-canvas-actions button {
+  width: 46px;
+  min-width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid oklch(0.5 0.025 70 / 0.16);
+  border-radius: 999px;
+  background: oklch(0.985 0.008 85 / 0.94);
+  color: var(--ink);
+  box-shadow: 0 10px 28px oklch(0.28 0.035 65 / 0.16);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease-out;
+}
+
+.simple-canvas-actions button:hover {
+  background: oklch(0.93 0.018 82);
+}
+
+.simple-canvas-actions button:active {
+  transform: scale(0.96);
+}
+
+.simple-canvas-actions button:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+
+.simple-canvas-actions .app-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.simple-canvas-actions button[data-active="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.simple-canvas-actions button > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.simple-canvas-history {
+  position: fixed;
+  z-index: 22;
+  left: max(22px, calc(env(safe-area-inset-left) + 14px));
+  bottom: max(80px, calc(env(safe-area-inset-bottom) + 72px));
+  width: min(260px, calc(100vw - 44px));
+  max-height: min(360px, calc(100dvh - 136px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid oklch(0.5 0.025 70 / 0.16);
+  border-radius: 18px;
+  background: oklch(0.985 0.008 85 / 0.96);
+  box-shadow: 0 16px 42px oklch(0.28 0.035 65 / 0.2);
+  backdrop-filter: blur(16px);
+}
+
+.simple-canvas-history-backdrop {
+  position: fixed;
+  z-index: 21;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.simple-canvas-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px 10px 14px;
+  border-bottom: 1px solid oklch(0.5 0.025 70 / 0.12);
+  font-size: 12px;
+}
+
+.simple-canvas-history-header button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.simple-canvas-history-header button:hover {
+  background: oklch(0.93 0.018 82);
+  color: var(--ink);
+}
+
+.simple-canvas-history-list {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  overflow: auto;
+}
+
+.simple-canvas-history-list button {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.simple-canvas-history-list button:hover {
+  background: oklch(0.93 0.018 82);
+}
+
+.simple-canvas-history-list button[data-active="true"] {
+  background: oklch(0.9 0.018 82);
+}
+
+.simple-canvas-history-list button:disabled {
+  cursor: default;
+}
+
+.simple-canvas-history-list span {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simple-canvas-history-list small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .simple-shape-menu {
   position: absolute;
   right: 4px;
@@ -958,6 +1125,20 @@ button:focus-visible,
     width: 48px;
     min-width: 48px;
     padding: 0;
+  }
+
+  .simple-canvas-actions {
+    bottom: max(78px, calc(env(safe-area-inset-bottom) + 70px));
+  }
+
+  .simple-canvas-history {
+    bottom: max(136px, calc(env(safe-area-inset-bottom) + 128px));
+  }
+
+  .simple-canvas-actions button {
+    width: 46px;
+    min-width: 46px;
+    height: 46px;
   }
 
   .simple-shape-menu {

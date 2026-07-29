@@ -23,6 +23,13 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.match(canvas, /<CameraCapture/);
   assert.match(canvas, /<StickerCanvasItem/);
   assert.match(canvas, /saveStickerRecord\(sticker\)/);
+  assert.match(canvas, /onboarding-guide-sticker-graffiti-en\.png/);
+  assert.match(canvas, /EXAMPLE_GUIDE_STICKER_ID/);
+  assert.match(canvas, /width: 300,/);
+  assert.match(canvas, /height: 500,/);
+  assert.match(canvas, /x: 150,/);
+  assert.match(canvas, /x: -160,/);
+  assert.match(canvas, /oilFilmEnabled: true/);
   assert.match(canvas, /capture="environment"/);
   assert.match(camera, /getUserMedia/);
   assert.match(camera, /maximumSide = 2048/);

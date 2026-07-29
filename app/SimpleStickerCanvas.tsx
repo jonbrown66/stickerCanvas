@@ -36,10 +36,13 @@ import {
 } from "@/lib/sticker-image-processing";
 import { exportCanvasToPng } from "@/lib/canvas-export";
 import {
+  readCanvasProjects,
   readStickerRecords,
   removeStickerRecord,
   replaceStickerRecords,
+  saveCanvasProject,
   saveStickerRecord,
+  type CanvasProject,
 } from "@/lib/sticker-storage";
 import { CameraCapture } from "./CameraCapture";
 import {
@@ -49,6 +52,7 @@ import {
 } from "./BackgroundDissolveEffect";
 import { CanvasBottomToolbar } from "./CanvasBottomToolbar";
 import { CanvasElementItem } from "./CanvasElementItem";
+import { Icon } from "./Icon";
 import { StickerCanvasItem } from "./StickerCanvasItem";
 
 type StickerGesture = {
@@ -86,9 +90,12 @@ type ShapeDrawingGesture = {
 
 const VIEW_KEY = "simple-sticker-canvas:view";
 const SEEDED_KEY = "simple-sticker-canvas:seeded";
-const SEEDED_VERSION = "3";
+const ACTIVE_CANVAS_KEY = "simple-sticker-canvas:active-canvas";
+const SEEDED_VERSION = "6";
 const EXAMPLE_STICKER_ID = "example-sticker-v1";
 const EXAMPLE_STICKER_URL = `${import.meta.env.BASE_URL}sticker-canvas-logo.svg`;
+const EXAMPLE_GUIDE_STICKER_ID = "example-guide-sticker-v1";
+const EXAMPLE_GUIDE_STICKER_URL = `${import.meta.env.BASE_URL}onboarding-guide-sticker-graffiti-en.png`;
 const MIN_ZOOM = 0.08;
 const MAX_ZOOM = 6;
 
@@ -155,6 +162,49 @@ async function preloadImageUrl(url: string) {
   await image.decode();
 }
 
+async function fetchSampleImage(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("Sample unavailable");
+  return response.blob();
+}
+
+async function createDefaultCanvasStickers() {
+  const [image, guideImage] = await Promise.all([
+    fetchSampleImage(EXAMPLE_STICKER_URL),
+    fetchSampleImage(EXAMPLE_GUIDE_STICKER_URL),
+  ]);
+  const createdAt = Date.now();
+  return [
+    {
+      id: EXAMPLE_STICKER_ID,
+      type: "image" as const,
+      image,
+      url: URL.createObjectURL(image),
+      width: 280,
+      height: 280,
+      x: -160,
+      y: -24,
+      rotation: -4,
+      zIndex: 1,
+      createdAt,
+    },
+    {
+      id: EXAMPLE_GUIDE_STICKER_ID,
+      type: "image" as const,
+      image: guideImage,
+      url: URL.createObjectURL(guideImage),
+      width: 300,
+      height: 500,
+      x: 150,
+      y: 86,
+      rotation: 2,
+      zIndex: 2,
+      oilFilmEnabled: true,
+      createdAt,
+    },
+  ] satisfies CanvasSticker[];
+}
+
 export function SimpleStickerCanvas() {
   const viewportRef = useRef<HTMLElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -200,6 +250,10 @@ export function SimpleStickerCanvas() {
     useState<BackgroundDissolveEffectData | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isCreatingCanvas, setIsCreatingCanvas] = useState(false);
+  const [canvasProjects, setCanvasProjects] = useState<CanvasProject[]>([]);
+  const [activeCanvasId, setActiveCanvasId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
@@ -392,56 +446,115 @@ export function SimpleStickerCanvas() {
     void readStickerRecords()
       .then(async (records) => {
         if (disposed) return;
+        let projects = await readCanvasProjects();
+        const storedCanvasId = localStorage.getItem(ACTIVE_CANVAS_KEY);
+        let currentProject = projects.find(
+          (project) => project.id === storedCanvasId,
+        );
+        if (!currentProject) {
+          const timestamp = Date.now();
+          currentProject = {
+            id: crypto.randomUUID(),
+            name: `Canvas ${projects.length + 1}`,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            elements: records,
+          };
+          await saveCanvasProject(currentProject);
+          projects = [...projects, currentProject];
+          localStorage.setItem(ACTIVE_CANVAS_KEY, currentProject.id);
+        }
+        if (disposed) return;
+        setCanvasProjects(projects);
+        setActiveCanvasId(currentProject.id);
         const seededVersion = localStorage.getItem(SEEDED_KEY);
         const existingExample = records.find(
           (record) =>
             record.type === "image" &&
             record.id === EXAMPLE_STICKER_ID,
         );
+        const existingGuide = records.find(
+          (record) =>
+            record.type === "image" &&
+            record.id === EXAMPLE_GUIDE_STICKER_ID,
+        );
+        const hasOnlyDefaultSamples = records.every(
+          (record) =>
+            record.id === EXAMPLE_STICKER_ID ||
+            record.id === EXAMPLE_GUIDE_STICKER_ID,
+        );
         let restoredRecords = records;
 
         if (existingExample && seededVersion !== SEEDED_VERSION) {
-          const response = await fetch(EXAMPLE_STICKER_URL);
-          if (!response.ok) throw new Error("Sample update failed");
-          const image = await response.blob();
+          const image = await fetchSampleImage(EXAMPLE_STICKER_URL);
+          const shouldAddGuide = !existingGuide && records.length === 1;
           const upgradedExample = {
             ...existingExample,
             image,
             width: 280,
             height: 280,
+            ...(hasOnlyDefaultSamples ? { x: -160, y: -24 } : {}),
           };
           await saveStickerRecord(upgradedExample);
+          const guide = shouldAddGuide
+            ? {
+                id: EXAMPLE_GUIDE_STICKER_ID,
+                type: "image" as const,
+                image: await fetchSampleImage(EXAMPLE_GUIDE_STICKER_URL),
+                width: 300,
+                height: 500,
+                x: 150,
+                y: 86,
+                rotation: 2,
+                zIndex: 2,
+                oilFilmEnabled: true,
+                createdAt: Date.now(),
+              }
+            : existingGuide && hasOnlyDefaultSamples
+              ? {
+                  ...existingGuide,
+                  width: 300,
+                  height: 500,
+                  x: 150,
+                  y: 86,
+                  oilFilmEnabled: true,
+                }
+            : null;
+          if (guide) await saveStickerRecord(guide);
           localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
-          restoredRecords = records.map((record) =>
-            record.id === EXAMPLE_STICKER_ID ? upgradedExample : record,
-          );
+          restoredRecords = [
+            ...records.map((record) =>
+              record.id === EXAMPLE_STICKER_ID
+                ? upgradedExample
+                : record.id === EXAMPLE_GUIDE_STICKER_ID && guide
+                  ? guide
+                  : record,
+            ),
+            ...(shouldAddGuide && guide ? [guide] : []),
+          ];
         }
 
         if (!restoredRecords.length && seededVersion === null) {
-          const response = await fetch(EXAMPLE_STICKER_URL);
-          if (!response.ok) throw new Error("Sample unavailable");
-          const image = await response.blob();
-          const sticker: CanvasSticker = {
-            id: EXAMPLE_STICKER_ID,
-            type: "image",
-            image,
-            url: URL.createObjectURL(image),
-            width: 280,
-            height: 280,
-            x: 0,
-            y: -24,
-            rotation: -4,
-            zIndex: 1,
-            createdAt: Date.now(),
-          };
-          await saveStickerRecord(sticker);
+          const defaults = await createDefaultCanvasStickers();
+          await Promise.all(defaults.map((sticker) => saveStickerRecord(sticker)));
           localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
           if (disposed) {
-            URL.revokeObjectURL(sticker.url);
+            defaults.forEach((sticker) => URL.revokeObjectURL(sticker.url));
             return;
           }
-          replaceStickers([sticker], false);
-          historyRef.current = createStickerHistory([sticker]);
+          replaceStickers(defaults, false);
+          historyRef.current = createStickerHistory(defaults);
+          const updatedProject = {
+            ...currentProject,
+            updatedAt: Date.now(),
+            elements: defaults,
+          };
+          await saveCanvasProject(updatedProject);
+          setCanvasProjects((current) =>
+            current.map((project) =>
+              project.id === updatedProject.id ? updatedProject : project,
+            ),
+          );
           return;
         }
         const restored = restoredRecords
@@ -458,6 +571,17 @@ export function SimpleStickerCanvas() {
         if (!disposed) {
           replaceStickers(restored, false);
           historyRef.current = createStickerHistory(restored);
+          const updatedProject = {
+            ...currentProject,
+            updatedAt: Date.now(),
+            elements: restoredRecords,
+          };
+          await saveCanvasProject(updatedProject);
+          setCanvasProjects((current) =>
+            current.map((project) =>
+              project.id === updatedProject.id ? updatedProject : project,
+            ),
+          );
         }
       })
       .catch(() => setNotice("Restore failed"));
@@ -1142,6 +1266,134 @@ export function SimpleStickerCanvas() {
     void exportCanvas();
   }, [exportCanvas]);
 
+  const createNewCanvas = useCallback(async () => {
+    setIsCreatingCanvas(true);
+    setNotice("");
+    try {
+      const defaults = await createDefaultCanvasStickers();
+      const previous = stickersRef.current;
+      const now = Date.now();
+      const currentProject = canvasProjects.find(
+        (project) => project.id === activeCanvasId,
+      );
+      const nextProject: CanvasProject = {
+        id: crypto.randomUUID(),
+        name: `Canvas ${canvasProjects.length + 1}`,
+        createdAt: now,
+        updatedAt: now,
+        elements: defaults,
+      };
+      const archivedProject = currentProject
+        ? {
+            ...currentProject,
+            updatedAt: now,
+            elements: previous,
+          }
+        : null;
+      await Promise.all([
+        ...(archivedProject ? [saveCanvasProject(archivedProject)] : []),
+        saveCanvasProject(nextProject),
+      ]);
+      await replaceStickerRecords(defaults);
+      replaceStickers(defaults, false);
+      previous.forEach((sticker) => {
+        if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
+      });
+      historyRef.current = createStickerHistory(defaults);
+      localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
+      localStorage.setItem(ACTIVE_CANVAS_KEY, nextProject.id);
+      setCanvasProjects((current) => [
+        ...current.map((project) =>
+          project.id === archivedProject?.id ? archivedProject : project,
+        ),
+        nextProject,
+      ]);
+      setActiveCanvasId(nextProject.id);
+      setHistoryOpen(false);
+      setActiveTool("select");
+      setShapeMenuOpen(false);
+      setEditingId(null);
+      setDrawingId(null);
+      selectSticker(null);
+      setNotice("New canvas ready");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "New canvas failed");
+    } finally {
+      setIsCreatingCanvas(false);
+    }
+  }, [activeCanvasId, canvasProjects, replaceStickers, selectSticker]);
+
+  const openCanvasProject = useCallback(
+    async (projectId: string) => {
+      if (projectId === activeCanvasId) {
+        setHistoryOpen(false);
+        return;
+      }
+      const targetProject = canvasProjects.find(
+        (project) => project.id === projectId,
+      );
+      if (!targetProject) return;
+      setIsCreatingCanvas(true);
+      setNotice("");
+      try {
+        const now = Date.now();
+        const currentProject = canvasProjects.find(
+          (project) => project.id === activeCanvasId,
+        );
+        const archivedProject = currentProject
+          ? {
+              ...currentProject,
+              updatedAt: now,
+              elements: stickersRef.current,
+            }
+          : null;
+        const openedProject = { ...targetProject, updatedAt: now };
+        await Promise.all([
+          ...(archivedProject ? [saveCanvasProject(archivedProject)] : []),
+          saveCanvasProject(openedProject),
+        ]);
+        const restored = [...openedProject.elements]
+          .sort((left, right) => left.zIndex - right.zIndex)
+          .map(
+            (record): CanvasElement =>
+              record.type === "image"
+                ? { ...record, url: URL.createObjectURL(record.image) }
+                : { ...record },
+          );
+        const previous = stickersRef.current;
+        await replaceStickerRecords(restored);
+        replaceStickers(restored, false);
+        previous.forEach((sticker) => {
+          if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
+        });
+        historyRef.current = createStickerHistory(restored);
+        localStorage.setItem(ACTIVE_CANVAS_KEY, openedProject.id);
+        setCanvasProjects((current) =>
+          current.map((project) =>
+            project.id === archivedProject?.id
+              ? archivedProject
+              : project.id === openedProject.id
+                ? openedProject
+                : project,
+          ),
+        );
+        setActiveCanvasId(openedProject.id);
+        setHistoryOpen(false);
+        setActiveTool("select");
+        setShapeMenuOpen(false);
+        setEditingId(null);
+        setDrawingId(null);
+        selectSticker(null);
+        setNotice(`${openedProject.name} opened`);
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Canvas open failed");
+      } finally {
+        setIsCreatingCanvas(false);
+      }
+    },
+    [activeCanvasId, canvasProjects, replaceStickers, selectSticker],
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target;
@@ -1501,11 +1753,16 @@ export function SimpleStickerCanvas() {
         </p>
       ) : null}
 
-      {isImporting || isExporting ? (
+      {isImporting || isExporting || isCreatingCanvas ? (
         <div className="simple-processing" role="status" aria-live="polite">
           <span className="simple-processing-spinner" aria-hidden="true" />
           <strong>
-            {notice || (isExporting ? "Exporting canvas…" : "Creating sticker…")}
+            {notice ||
+              (isCreatingCanvas
+                ? "Creating new canvas…"
+                : isExporting
+                  ? "Exporting canvas…"
+                  : "Creating sticker…")}
           </strong>
         </div>
       ) : notice ? (
@@ -1520,9 +1777,89 @@ export function SimpleStickerCanvas() {
         </button>
       ) : null}
 
+      {historyOpen ? (
+        <>
+          <button
+            className="simple-canvas-history-backdrop"
+            type="button"
+            data-canvas-ui
+            aria-label="Close canvas history"
+            onClick={() => setHistoryOpen(false)}
+          />
+          <aside className="simple-canvas-history" data-canvas-ui aria-label="Canvas history">
+            <div className="simple-canvas-history-header">
+              <strong>Canvas history</strong>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="Close canvas history"
+                title="Close"
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+            <div className="simple-canvas-history-list">
+              {[...canvasProjects]
+                .sort((left, right) => right.updatedAt - left.updatedAt)
+                .map((project) => (
+                  <button
+                    key={project.id}
+                    type="button"
+                    disabled={isCreatingCanvas || project.id === activeCanvasId}
+                    data-active={project.id === activeCanvasId}
+                    onClick={() => void openCanvasProject(project.id)}
+                  >
+                    <span>{project.name}</span>
+                    <small>
+                      {new Date(project.updatedAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </small>
+                  </button>
+                ))}
+            </div>
+          </aside>
+        </>
+      ) : null}
+
+      <div className="simple-canvas-actions" data-canvas-ui aria-label="Canvas actions">
+        <button
+          type="button"
+          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
+          onClick={() => setHistoryOpen((current) => !current)}
+          aria-label="Canvas history"
+          title="Canvas history"
+          data-active={historyOpen}
+        >
+          <Icon name="history" />
+          <span>Canvas history</span>
+        </button>
+        <button
+          type="button"
+          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
+          onClick={() => void createNewCanvas()}
+          aria-label="New canvas"
+          title="New canvas"
+        >
+          <Icon name="plus" />
+          <span>New canvas</span>
+        </button>
+        <button
+          type="button"
+          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
+          onClick={downloadCanvas}
+          aria-label="Download canvas"
+          title="Download canvas"
+        >
+          <Icon name="download" />
+          <span>Download canvas</span>
+        </button>
+      </div>
+
       <CanvasBottomToolbar
         activeTool={activeTool}
-        disabled={isImporting || isExporting || Boolean(processingStickerId)}
+        disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
         shapeMenuOpen={shapeMenuOpen}
         onUpload={() => {
           setActiveTool("select");
@@ -1533,11 +1870,6 @@ export function SimpleStickerCanvas() {
           setActiveTool("select");
           setShapeMenuOpen(false);
           setCameraOpen(true);
-        }}
-        onDownloadCanvas={() => {
-          setActiveTool("select");
-          setShapeMenuOpen(false);
-          downloadCanvas();
         }}
         onSelectTool={(tool) => {
           setActiveTool(tool);
