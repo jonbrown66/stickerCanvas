@@ -42,7 +42,7 @@ function getImagePadding(element: CanvasSticker) {
 function getVisualPadding(element: CanvasElement) {
   if (element.type === "image") return getImagePadding(element);
   if (element.type === "shape") return element.strokeWidth / 2 + 2;
-  return 0;
+  return element.textOutlineWidth > 0 ? element.textOutlineWidth / 2 + 2 : 0;
 }
 
 function includeRotatedElement(bounds: Bounds, element: CanvasElement) {
@@ -166,6 +166,9 @@ function drawTextLine(
   maximumWidth: number,
   align: CanvasTextElement["textAlign"],
   lineHeight: number,
+  textOutlineWidth: number,
+  textOutlineColor: string,
+  holoEnabled: boolean,
 ) {
   const words = line.includes(" ") ? line.split(/(\s+)/) : [...line];
   let current = "";
@@ -187,6 +190,36 @@ function drawTextLine(
         : align === "right"
           ? x + maximumWidth - measured
           : x;
+    if (textOutlineWidth > 0) {
+      context.save();
+      context.strokeStyle = textOutlineColor;
+      context.lineWidth = textOutlineWidth;
+      context.shadowColor = "rgba(42, 48, 31, 0.48)";
+      context.shadowBlur = Math.max(1.5, textOutlineWidth * 0.34);
+      context.shadowOffsetY = Math.max(1.5, textOutlineWidth * 0.28);
+      context.strokeText(wrapped, drawX, y + index * lineHeight);
+      if (holoEnabled) {
+        const holo = context.createLinearGradient(
+          drawX,
+          y - lineHeight,
+          drawX + Math.max(1, measured),
+          y,
+        );
+        holo.addColorStop(0, "rgba(93, 221, 211, 0.88)");
+        holo.addColorStop(0.24, "rgba(192, 154, 255, 0.78)");
+        holo.addColorStop(0.46, "rgba(255, 220, 132, 0.84)");
+        holo.addColorStop(0.64, "rgba(133, 224, 171, 0.82)");
+        holo.addColorStop(0.82, "rgba(111, 181, 255, 0.84)");
+        holo.addColorStop(1, "rgba(247, 165, 208, 0.82)");
+        context.shadowColor = "transparent";
+        context.shadowBlur = 0;
+        context.shadowOffsetY = 0;
+        context.globalAlpha = 0.84;
+        context.strokeStyle = holo;
+        context.strokeText(wrapped, drawX, y + index * lineHeight);
+      }
+      context.restore();
+    }
     context.fillText(wrapped, drawX, y + index * lineHeight);
   });
   return lines.length;
@@ -214,6 +247,9 @@ function drawTextElement(
   context.fillStyle = element.color;
   context.font = `${element.fontWeight} ${element.fontSize * scale}px "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif`;
   context.textBaseline = "alphabetic";
+  context.lineJoin = "round";
+  context.lineCap = "round";
+  context.miterLimit = 2;
   const lineHeight = element.fontSize * scale * 1.35;
   let lineOffset = 0;
   element.text.split("\n").forEach((line) => {
@@ -225,6 +261,9 @@ function drawTextElement(
       Math.max(1, width - padding * 2),
       element.textAlign,
       lineHeight,
+      element.textOutlineWidth * scale,
+      element.textOutlineColor,
+      element.holoEnabled,
     );
     lineOffset += lineCount;
   });

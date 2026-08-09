@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("keeps canvas concerns split into focused modules", async () => {
-  const [canvas, camera, item, storage, processing, styles, html] =
+  const [canvas, camera, item, settings, storage, processing, styles, html] =
     await Promise.all([
       readFile(
         new URL("../app/SimpleStickerCanvas.tsx", import.meta.url),
@@ -11,6 +11,7 @@ test("keeps canvas concerns split into focused modules", async () => {
       ),
       readFile(new URL("../app/CameraCapture.tsx", import.meta.url), "utf8"),
       readFile(new URL("../app/StickerCanvasItem.tsx", import.meta.url), "utf8"),
+      readFile(new URL("../app/StickerSettingsPanel.tsx", import.meta.url), "utf8"),
       readFile(new URL("../lib/sticker-storage.ts", import.meta.url), "utf8"),
       readFile(
         new URL("../lib/sticker-image-processing.ts", import.meta.url),
@@ -52,6 +53,11 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.match(item, /className="simple-sticker-holo-border"/);
   assert.match(item, /operator="out"/);
   assert.match(item, /className="simple-holo-border-glint"/);
+  assert.match(settings, /className="sticker-vertical-toolbar sticker-labeled-toolbar"/);
+  for (const label of ["Cutout", "Stroke", "Color", "Holo", "Save", "Delete"]) {
+    assert.match(settings, new RegExp(`sticker-vtoolbar-label">${label}<`));
+  }
+  assert.match(settings, /#84a729/);
   assert.match(storage, /indexedDB\.open/);
   assert.match(storage, /transactionDone/);
   assert.match(storage, /replaceStickerRecords/);
@@ -73,6 +79,8 @@ test("keeps canvas concerns split into focused modules", async () => {
     /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.simple-processing-spinner[\s\S]*?animation-iteration-count: infinite !important/,
   );
   assert.match(styles, /\.simple-sticker-canvas/);
+  assert.match(styles, /--accent: #84a729/);
+  assert.match(styles, /\.sticker-labeled-toolbar[\s\S]*?width: 112px/);
   assert.match(styles, /\.simple-oil-spectrum[\s\S]*?mix-blend-mode: color/);
   assert.match(styles, /\.simple-oil-streak[\s\S]*?mix-blend-mode: screen/);
   assert.match(styles, /\.simple-sticker-holo-border/);

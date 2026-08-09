@@ -3,6 +3,7 @@
   --paper-raised: oklch(0.985 0.008 85);
   --ink: oklch(0.24 0.022 70);
   --muted: oklch(0.5 0.025 70);
+  --accent: #84a729;
   --tomato: oklch(0.63 0.19 32);
 }
 
@@ -29,7 +30,7 @@ button {
 
 button:focus-visible,
 [tabindex]:focus-visible {
-  outline: 3px solid color-mix(in oklch, var(--tomato) 55%, transparent);
+  outline: 3px solid color-mix(in oklch, var(--accent) 55%, transparent);
   outline-offset: 3px;
 }
 
@@ -129,6 +130,44 @@ button:focus-visible,
   height: 100%;
   overflow: visible;
   pointer-events: none;
+}
+
+.canvas-text-outline {
+  filter: none;
+}
+
+.canvas-text-outline,
+.canvas-text-holo,
+.canvas-text-content {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+
+.canvas-text-holo {
+  background-image:
+    radial-gradient(
+      ellipse 64% 88% at var(--text-holo-x, 50%) var(--text-holo-y, 50%),
+      rgba(255, 255, 255, 0.86),
+      rgba(255, 255, 255, 0.12) 34%,
+      transparent 72%
+    ),
+    linear-gradient(
+      var(--text-holo-angle, 112deg),
+      rgba(93, 221, 211, 0.88) 0%,
+      rgba(192, 154, 255, 0.78) 24%,
+      rgba(255, 220, 132, 0.84) 46%,
+      rgba(133, 224, 171, 0.82) 64%,
+      rgba(111, 181, 255, 0.84) 82%,
+      rgba(247, 165, 208, 0.82) 100%
+    );
+  background-position: center, var(--text-holo-x, 50%) var(--text-holo-y, 50%);
+  background-size: 100% 100%, 220% 220%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: none;
+  mix-blend-mode: normal;
+  opacity: var(--text-holo-opacity, 0.76);
 }
 
 .simple-sticker[data-selected="true"] {
@@ -243,8 +282,8 @@ button:focus-visible,
   right: calc(-17px * var(--simple-control-scale));
 }
 .simple-sticker-settings[data-active="true"] {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--accent);
+  color: var(--ink);
 }
 
 /* ── 贴纸控制句柄 (Control Handles) ── */
@@ -466,8 +505,8 @@ button:focus-visible,
 }
 
 .sticker-vtoolbar-btn[data-active="true"] {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--accent);
+  color: var(--ink);
 }
 
 .sticker-vtoolbar-btn:disabled,
@@ -532,7 +571,7 @@ button:focus-visible,
 
 .sticker-stroke-range {
   width: 96px;
-  accent-color: var(--ink);
+  accent-color: var(--accent);
 }
 
 .simple-processing-spinner {
@@ -566,6 +605,11 @@ button:focus-visible,
   border: 1.5px solid var(--paper);
   cursor: pointer;
   box-shadow: 0 1px 4px oklch(0 0 0 / 0.15);
+}
+
+.sticker-color-swatch-sm[data-active="true"] {
+  border-color: var(--accent);
+  transform: scale(1.12);
 }
 
 .sticker-color-custom-sm input {
@@ -635,8 +679,8 @@ button:focus-visible,
 }
 
 .simple-floating-actions button[data-active="true"] {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--accent);
+  color: var(--ink);
 }
 
 .simple-floating-actions button:active {
@@ -700,8 +744,8 @@ button:focus-visible,
 }
 
 .simple-canvas-actions button[data-active="true"] {
-  background: var(--ink);
-  color: var(--paper);
+  background: var(--accent);
+  color: var(--ink);
 }
 
 .simple-canvas-actions button > span {
@@ -849,7 +893,7 @@ button:focus-visible,
   cursor: pointer;
 }
 
-.canvas-style-color > span {
+.canvas-style-color > .canvas-style-color-dot {
   position: absolute;
   inset: 5px;
   border: 1.5px solid var(--paper);
@@ -867,6 +911,95 @@ button:focus-visible,
   cursor: pointer;
 }
 
+/* Shared labeled toolbar keeps text and image controls readable without
+   turning the floating panel into a heavy inspector. */
+.sticker-labeled-toolbar {
+  width: 112px;
+  padding: 7px 6px;
+  gap: 3px;
+  align-items: stretch;
+  box-sizing: border-box;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-item {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-btn {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-btn > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-btn > .sticker-vtoolbar-color-dot {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-label {
+  min-width: 0;
+  overflow: hidden;
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticker-labeled-toolbar .canvas-style-color {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  border-radius: 10px;
+  transition: background 0.15s ease;
+}
+
+.sticker-labeled-toolbar .canvas-style-color:hover {
+  background: oklch(0.92 0.01 85);
+}
+
+.sticker-labeled-toolbar .canvas-style-color > .canvas-style-color-dot {
+  position: static;
+  inset: auto;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.sticker-labeled-toolbar .canvas-style-color > .sticker-vtoolbar-label {
+  color: var(--ink);
+}
+
+.sticker-labeled-toolbar .canvas-style-color input {
+  z-index: 1;
+}
+
+.sticker-labeled-toolbar .sticker-vtoolbar-divider {
+  width: calc(100% - 16px);
+  margin: 1px 8px;
+}
+
 .canvas-property-flyout {
   padding: 7px 10px;
   border-radius: 999px;
@@ -874,7 +1007,7 @@ button:focus-visible,
 
 .canvas-property-flyout input {
   width: 92px;
-  accent-color: var(--ink);
+  accent-color: var(--accent);
 }
 
 .simple-shape-menu button {
@@ -1600,7 +1733,7 @@ button:focus-visible,
 }
 
 .sticker-color-swatch[data-active="true"] {
-  border-color: var(--ink);
+  border-color: var(--accent);
   transform: scale(1.12);
 }
 

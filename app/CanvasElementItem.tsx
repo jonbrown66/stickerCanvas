@@ -2,6 +2,7 @@
 
 import {
   memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -59,6 +60,16 @@ function CanvasElementItemComponent({
   const articleRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editFinishedRef = useRef(false);
+  const holoFrameRef = useRef<number | null>(null);
+  const holoMotionRef = useRef({
+    x: 0.5,
+    y: 0.5,
+    targetX: 0.5,
+    targetY: 0.5,
+    velocityX: 0,
+    velocityY: 0,
+    lastTime: 0,
+  });
   const [toolbarPlacement, setToolbarPlacement] = useState<"left" | "right">(
     "right",
   );
@@ -83,7 +94,7 @@ function CanvasElementItemComponent({
       const rect = articleRef.current?.getBoundingClientRect();
       if (!rect) return;
       setToolbarPlacement(
-        window.innerWidth - rect.right < 210 ? "left" : "right",
+        window.innerWidth - rect.right < 260 ? "left" : "right",
       );
     };
     updatePlacement();
@@ -128,6 +139,118 @@ function CanvasElementItemComponent({
     onSelect(element.id);
     onGestureStart(event, element, "move");
   };
+
+  const applyHoloPointer = useCallback((x: number, y: number) => {
+    const article = articleRef.current;
+    if (!article) return;
+    const offsetX = x - 0.5;
+    const offsetY = y - 0.5;
+    const distance = Math.min(1, Math.hypot(offsetX, offsetY) * 1.8);
+    article.style.setProperty("--text-holo-x", `${x * 100}%`);
+    article.style.setProperty("--text-holo-y", `${y * 100}%`);
+    article.style.setProperty(
+      "--text-holo-angle",
+      `${112 + offsetX * 34 - offsetY * 22}deg`,
+    );
+    article.style.setProperty(
+      "--text-holo-opacity",
+      `${0.66 + distance * 0.24}`,
+    );
+  }, []);
+
+  const scheduleHoloPointer = useCallback(
+    (x: number, y: number) => {
+      const motion = holoMotionRef.current;
+      motion.targetX = x;
+      motion.targetY = y;
+      if (holoFrameRef.current !== null) return;
+      motion.lastTime = 0;
+
+      const tick = (now: number) => {
+        const deltaSeconds = motion.lastTime
+          ? Math.min(0.032, (now - motion.lastTime) / 1_000)
+          : 1 / 60;
+        motion.lastTime = now;
+        const stiffness = 230;
+        const damping = 24;
+        motion.velocityX +=
+          (motion.targetX - motion.x) * stiffness * deltaSeconds -
+          motion.velocityX * damping * deltaSeconds;
+        motion.velocityY +=
+          (motion.targetY - motion.y) * stiffness * deltaSeconds -
+          motion.velocityY * damping * deltaSeconds;
+        motion.x += motion.velocityX * deltaSeconds;
+        motion.y += motion.velocityY * deltaSeconds;
+        applyHoloPointer(motion.x, motion.y);
+
+        const unsettled =
+          Math.abs(motion.targetX - motion.x) > 0.0005 ||
+          Math.abs(motion.targetY - motion.y) > 0.0005 ||
+          Math.abs(motion.velocityX) > 0.002 ||
+          Math.abs(motion.velocityY) > 0.002;
+        if (unsettled) {
+          holoFrameRef.current = requestAnimationFrame(tick);
+          return;
+        }
+
+        motion.x = motion.targetX;
+        motion.y = motion.targetY;
+        motion.velocityX = 0;
+        motion.velocityY = 0;
+        motion.lastTime = 0;
+        holoFrameRef.current = null;
+        applyHoloPointer(motion.x, motion.y);
+      };
+
+      holoFrameRef.current = requestAnimationFrame(tick);
+    },
+    [applyHoloPointer],
+  );
+
+  const isTextHoloEnabled =
+    element.type === "text" && element.holoEnabled;
+
+  const handleHoloPointerMove = useCallback(
+    (event: PointerEvent<HTMLElement>) => {
+      if (!isTextHoloEnabled || editing) return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-canvas-ui]")
+      ) {
+        return;
+      }
+      const article = event.currentTarget;
+      const rect = article.getBoundingClientRect();
+      const x = Math.min(
+        1,
+        Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)),
+      );
+      const y = Math.min(
+        1,
+        Math.max(0, (event.clientY - rect.top) / Math.max(1, rect.height)),
+      );
+      article.dataset.textHoloHover = "true";
+      scheduleHoloPointer(x, y);
+    },
+    [editing, isTextHoloEnabled, scheduleHoloPointer],
+  );
+
+  const handleHoloPointerLeave = useCallback(() => {
+    if (!isTextHoloEnabled || editing) return;
+    if (articleRef.current) {
+      articleRef.current.dataset.textHoloHover = "false";
+    }
+    scheduleHoloPointer(0.5, 0.5);
+  }, [editing, isTextHoloEnabled, scheduleHoloPointer]);
+
+  useEffect(
+    () => () => {
+      if (holoFrameRef.current !== null) {
+        cancelAnimationFrame(holoFrameRef.current);
+      }
+    },
+    [],
+  );
 
   const startGesture = (event: PointerEvent<HTMLElement>, kind: CanvasElementGestureKind) => {
     event.stopPropagation();
@@ -192,14 +315,37 @@ function CanvasElementItemComponent({
       );
     }
 
-    const textStyle = {
+    const textOutlineWidth = Math.max(0, element.textOutlineWidth);
+    const textOutlineStrokeWidth = textOutlineWidth * 0.66;
+    const textOutlineEdgeBlur =
+      textOutlineWidth > 0 ? Math.max(0.35, textOutlineWidth * 0.12) : 0;
+    const textOutlineShadow =
+      textOutlineWidth > 0
+        ? [
+            `0 0 ${textOutlineEdgeBlur}px ${element.textOutlineColor}`,
+            `0 ${Math.max(1.5, textOutlineWidth * 0.28)}px ${Math.max(1.5, textOutlineWidth * 0.34)}px rgba(42, 48, 31, 0.48)`,
+          ].join(", ")
+        : "none";
+    const textContentStyle = {
       color: element.color,
       fontSize: element.fontSize,
       fontWeight: element.fontWeight,
       textAlign: element.textAlign,
+      lineHeight: 1.35,
+      whiteSpace: "pre-wrap" as const,
+      fontFamily: "inherit",
+    };
+    const textBoxStyle = {
       background: element.backgroundColor,
       border: `${element.borderWidth}px solid ${element.borderColor}`,
       borderRadius: element.borderRadius,
+    };
+    const textOutlineStyle = {
+      ...textContentStyle,
+      color: element.textOutlineColor,
+      WebkitTextStroke: `${textOutlineStrokeWidth}px ${element.textOutlineColor}`,
+      paintOrder: "stroke fill",
+      textShadow: textOutlineShadow,
     };
 
     if (editing) {
@@ -215,7 +361,8 @@ function CanvasElementItemComponent({
           onBlur={(event) => commitText(event.currentTarget.value)}
           onPointerDown={(event) => event.stopPropagation()}
           style={{
-            ...textStyle,
+            ...textBoxStyle,
+            ...textContentStyle,
             width: "100%",
             height: "100%",
             display: "block",
@@ -234,18 +381,71 @@ function CanvasElementItemComponent({
     return (
       <div
         style={{
-          ...textStyle,
+          ...textBoxStyle,
           width: "100%",
           height: "100%",
           boxSizing: "border-box",
-          padding: 8,
-          whiteSpace: "pre-wrap",
           overflow: "hidden",
-          lineHeight: 1.35,
+          position: "relative",
           userSelect: "none",
         }}
       >
-        {element.text}
+        {textOutlineWidth > 0 ? (
+          <span
+            className="canvas-text-outline"
+            aria-hidden="true"
+            style={{
+              ...textOutlineStyle,
+              position: "absolute",
+              inset: 8,
+              zIndex: 1,
+              display: "block",
+              width: "auto",
+              height: "auto",
+              overflow: "visible",
+              pointerEvents: "none",
+            }}
+          >
+            {element.text}
+          </span>
+        ) : null}
+        {element.holoEnabled && textOutlineWidth > 0 ? (
+          <span
+            className="canvas-text-holo"
+            aria-hidden="true"
+            style={{
+              ...textContentStyle,
+              position: "absolute",
+              inset: 8,
+              zIndex: 2,
+              width: "auto",
+              height: "auto",
+              color: "transparent",
+              WebkitTextFillColor: "transparent",
+              WebkitTextStroke: `${textOutlineStrokeWidth}px transparent`,
+              paintOrder: "stroke fill",
+              textShadow: "none",
+              pointerEvents: "none",
+            }}
+          >
+            {element.text}
+          </span>
+        ) : null}
+        <span
+          className="canvas-text-content"
+          style={{
+            ...textContentStyle,
+            position: "absolute",
+            inset: 8,
+            zIndex: 3,
+            display: "block",
+            width: "auto",
+            height: "auto",
+            overflow: "hidden",
+          }}
+        >
+          {element.text}
+        </span>
       </div>
     );
   })();
@@ -259,6 +459,7 @@ function CanvasElementItemComponent({
       data-element-type={element.type}
       data-selected={selected}
       data-drawing={drawing}
+      data-text-holo={element.type === "text" && element.holoEnabled}
       style={style}
       aria-label={element.type}
       role="group"
@@ -268,6 +469,9 @@ function CanvasElementItemComponent({
       onDoubleClick={() => {
         if (isTextual) onStartEditing(element.id);
       }}
+      onPointerEnter={handleHoloPointerMove}
+      onPointerMove={handleHoloPointerMove}
+      onPointerLeave={handleHoloPointerLeave}
     >
       {content}
 

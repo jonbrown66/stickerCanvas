@@ -34,6 +34,9 @@ function normalizeRecord(
       color: typeof raw.textColor === "string" ? raw.textColor : "#29251f",
       fontWeight: 400,
       textAlign: "left",
+      textOutlineColor: "#ffffff",
+      textOutlineWidth: 6,
+      holoEnabled: false,
       backgroundColor:
         typeof raw.backgroundColor === "string"
           ? raw.backgroundColor
@@ -46,6 +49,14 @@ function normalizeRecord(
   if (raw.type === "text") {
     return {
       ...raw,
+      textOutlineColor:
+        typeof raw.textOutlineColor === "string"
+          ? raw.textOutlineColor
+          : "#ffffff",
+      textOutlineWidth:
+        typeof raw.textOutlineWidth === "number" ? raw.textOutlineWidth : 6,
+      holoEnabled:
+        typeof raw.holoEnabled === "boolean" ? raw.holoEnabled : false,
       backgroundColor:
         typeof raw.backgroundColor === "string"
           ? raw.backgroundColor

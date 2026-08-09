@@ -9,7 +9,7 @@ import {
 import type { CanvasSticker, StickerStyleOptions } from "@/lib/canvas-types";
 import { Icon } from "./Icon";
 
-const QUICK_COLORS = ["#ffffff", "#1a1a1a", "#f4a0c0", "#7dcea0", "#85c1e9"];
+const QUICK_COLORS = ["#ffffff", "#1a1a1a", "#84a729", "#f4a0c0", "#85c1e9"];
 
 interface StickerSettingsToolbarProps {
   sticker: CanvasSticker;
@@ -60,7 +60,7 @@ export function StickerSettingsPanel({
   return (
     <div
       style={{ transformOrigin: placement === "left" ? "100% 0%" : "0% 0%" }}
-      className="sticker-vertical-toolbar"
+      className="sticker-vertical-toolbar sticker-labeled-toolbar"
       data-placement={placement}
       data-canvas-ui
       onPointerDown={stopEvent}
@@ -80,6 +80,7 @@ export function StickerSettingsPanel({
               aria-label="Remove background"
             >
               <Icon name="scissors" />
+              <span className="sticker-vtoolbar-label">Cutout</span>
             </button>
           </div>
           <div className="sticker-vtoolbar-divider" />
@@ -97,6 +98,7 @@ export function StickerSettingsPanel({
           aria-label="Stroke width"
         >
           <Icon name="stroke" />
+          <span className="sticker-vtoolbar-label">Stroke</span>
         </button>
 
         {activeFlyout === "stroke" ? (
@@ -140,6 +142,7 @@ export function StickerSettingsPanel({
             className="sticker-vtoolbar-color-dot"
             style={{ backgroundColor: sticker.outlineColor || "#ffffff" }}
           />
+          <span className="sticker-vtoolbar-label">Color</span>
         </button>
 
         {activeFlyout === "color" ? (
@@ -190,6 +193,7 @@ export function StickerSettingsPanel({
           aria-label="Holo effect"
         >
           <Icon name="sparkles" />
+          <span className="sticker-vtoolbar-label">Holo</span>
         </button>
       </div>
 
@@ -205,6 +209,7 @@ export function StickerSettingsPanel({
           aria-label="Download PNG"
         >
           <Icon name="download" />
+          <span className="sticker-vtoolbar-label">Save</span>
         </button>
       </div>
 
@@ -218,6 +223,7 @@ export function StickerSettingsPanel({
           aria-label="Delete"
         >
           <Icon name="trash" />
+          <span className="sticker-vtoolbar-label">Delete</span>
         </button>
       </div>
     </div>

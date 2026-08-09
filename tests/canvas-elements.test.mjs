@@ -53,8 +53,16 @@ test("canvas element types support text styling and five shape kinds without not
   assert.match(source, /export type CanvasElementRecord\s*=[\s\S]*?\| StickerRecord[\s\S]*?\| CanvasTextElement[\s\S]*?\| CanvasShapeElement/);
   assert.match(source, /export type CanvasElement\s*=[\s\S]*?\| CanvasSticker[\s\S]*?\| CanvasTextElement[\s\S]*?\| CanvasShapeElement/);
   assert.doesNotMatch(source, /CanvasNoteElement/);
-  for (const property of ["backgroundColor", "borderColor", "borderWidth", "borderRadius"]) {
-    assert.match(source, new RegExp(`${property}: (string|number)`));
+  for (const property of [
+    "textOutlineColor",
+    "textOutlineWidth",
+    "holoEnabled",
+    "backgroundColor",
+    "borderColor",
+    "borderWidth",
+    "borderRadius",
+  ]) {
+    assert.match(source, new RegExp(`${property}: (string|number|boolean)`));
   }
   for (const shape of ["rectangle", "ellipse", "triangle", "diamond", "line"]) {
     assert.match(source, new RegExp(`"${shape}"`));
@@ -71,6 +79,9 @@ test("storage version 4 keeps legacy migration and adds canvas history storage",
   assert.match(source, /const LEGACY_STICKER_STORE = "stickers"/);
   assert.match(source, /if \(raw\.type === "note"\)/);
   assert.match(source, /type: "text"/);
+  assert.match(source, /raw\.textOutlineColor/);
+  assert.match(source, /raw\.textOutlineWidth/);
+  assert.match(source, /raw\.holoEnabled/);
   assert.match(source, /elementCursorRequest\.onsuccess/);
   assert.match(source, /cursor\.update\(normalizeRecord\(cursor\.value\)\)/);
   assert.match(source, /legacyStore\.openCursor\(\)/);
@@ -92,6 +103,9 @@ test("canvas creates text on click, commits blurred editing, and draws shapes wi
   assert.match(source, /const finishShapeDrawing = useCallback\(/);
   assert.match(source, /isShapeTool\(activeTool\)[\s\S]*?startShapeDrawing\(event, activeTool\)/);
   assert.match(source, /fillEnabled: false/);
+  assert.match(source, /textOutlineColor: "#ffffff"/);
+  assert.match(source, /textOutlineWidth: 6 \/ currentView\.zoom/);
+  assert.match(source, /holoEnabled: false/);
   assert.match(source, /data-active-tool=\{activeTool\}/);
   assert.match(source, /<CanvasBottomToolbar[\s\S]*?activeTool=\{activeTool\}/);
   assert.match(source, /<CanvasElementItem[\s\S]*?element=\{sticker\}/);
@@ -107,7 +121,7 @@ test("element item commits blurred text, owns the contextual toolbar, and render
   assert.match(source, /event\.key === "Escape"/);
   assert.match(source, /onBlur=\{\(event\) => commitText\(event\.currentTarget\.value\)\}/);
   assert.match(source, /const \[toolbarPlacement, setToolbarPlacement\] = useState<"left" \| "right">/);
-  assert.match(source, /window\.innerWidth - rect\.right < 210 \? "left" : "right"/);
+  assert.match(source, /window\.innerWidth - rect\.right < 260 \? "left" : "right"/);
   assert.match(source, /selected && !editing && !drawing \? \(/);
   assert.match(source, /<CanvasPropertiesToolbar[\s\S]*?placement=\{toolbarPlacement\}/);
   assert.match(source, /<svg/);
@@ -124,6 +138,11 @@ test("element item commits blurred text, owns the contextual toolbar, and render
     assert.match(source, new RegExp(value.replace(/[{}]/g, "\\$&")));
   }
   assert.match(source, /element\.fillEnabled \? element\.fillColor : "none"/);
+  assert.match(source, /WebkitTextStroke/);
+  assert.match(source, /paintOrder: "stroke fill"/);
+  assert.match(source, /canvas-text-holo/);
+  assert.match(source, /onPointerMove=\{handleHoloPointerMove\}/);
+  assert.match(source, /className="canvas-text-content"[\s\S]*?\.\.\.textContentStyle/);
   assert.match(source, /data-canvas-element/);
 });
 
@@ -148,6 +167,7 @@ test("bottom toolbar exposes icon-only primary entries and five icon-only shape 
 
 test("properties toolbar exposes styling actions directly in the vertical toolbar", async () => {
   const source = await readSource("../app/CanvasPropertiesToolbar.tsx");
+  const styles = await readSource("../app/globals.css");
 
   assert.match(source, /placement = "right"/);
   assert.match(source, /data-placement=\{placement\}/);
@@ -159,13 +179,25 @@ test("properties toolbar exposes styling actions directly in the vertical toolba
   assert.match(source, /activeFlyout === "font-size"/);
   assert.match(source, /activeFlyout === "border-width"/);
   assert.match(source, /className="sticker-vtoolbar-flyout canvas-property-flyout"/);
-  for (const label of ["Text color", "Border color", "Border width"]) {
+  for (const label of [
+    "Text color",
+    "Text outline color",
+    "Text outline width",
+    "Border color",
+    "Border width",
+  ]) {
     assert.match(source, new RegExp(`aria-label="${label}"|title="${label}"|label="${label}"`));
   }
+  assert.match(source, /Turn on Holo/);
   assert.match(source, /label=\{isText \? "Background color" : "Fill color"\}/);
   assert.match(source, /backgroundColor/);
   assert.match(source, /borderColor/);
   assert.match(source, /borderWidth/);
+  assert.match(source, /textOutlineColor/);
+  assert.match(source, /textOutlineWidth/);
+  assert.match(source, /sticker-vtoolbar-label/);
+  assert.match(source, /max=\{48\}/);
+  assert.match(styles, /\.sticker-labeled-toolbar[\s\S]*?\.sticker-vtoolbar-label/);
   assert.match(source, /fillEnabled/);
   assert.match(source, /fillColor/);
   assert.match(source, /strokeColor/);
@@ -270,6 +302,125 @@ test("canvas PNG export keeps the paper dot grid, rotated content margin, and z-
     assert.equal(calls.some(([name, type]) => name === "toBlob" && type === "image/png"), true);
     assert.equal(exported.blob.type, "");
     assert.equal(exported.width > 0 && exported.height > 0 && exported.scale > 0, true);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
+test("text sticker outlines are included in preview fields and PNG export", async () => {
+  const [types, storage, item, toolbar, styles, exportSource, canvasExport] =
+    await Promise.all([
+      readSource("../lib/canvas-types.ts"),
+      readSource("../lib/sticker-storage.ts"),
+      readSource("../app/CanvasElementItem.tsx"),
+      readSource("../app/CanvasPropertiesToolbar.tsx"),
+      readSource("../app/globals.css"),
+      readSource("../lib/canvas-export.ts"),
+      loadCanvasExportModule(),
+    ]);
+
+  assert.match(types, /textOutlineColor: string/);
+  assert.match(types, /textOutlineWidth: number/);
+  assert.match(types, /holoEnabled: boolean/);
+  assert.match(storage, /raw\.textOutlineColor/);
+  assert.match(storage, /raw\.textOutlineWidth/);
+  assert.match(storage, /raw\.holoEnabled/);
+  assert.match(item, /WebkitTextStroke: `\$\{textOutlineStrokeWidth\}px/);
+  assert.match(item, /WebkitTextStroke: `\$\{textOutlineStrokeWidth\}px transparent`/);
+  assert.match(item, /textOutlineEdgeBlur/);
+  assert.match(item, /overflow: "visible"/);
+  assert.match(item, /textShadow:/);
+  assert.match(toolbar, /aria-label="Text outline width"/);
+  assert.match(toolbar, /Turn on Holo/);
+  assert.match(styles, /\.canvas-text-outline\s*\{\s*filter: none/);
+  assert.match(styles, /text-rendering: geometricPrecision/);
+  assert.match(styles, /-webkit-font-smoothing: antialiased/);
+  assert.doesNotMatch(styles, /\.canvas-text-outline\s*\{\s*filter: blur/);
+  assert.doesNotMatch(styles, /\.canvas-text-holo\s*\{[^}]*filter: blur/);
+  assert.match(exportSource, /context\.strokeText\(wrapped, drawX/);
+  assert.match(exportSource, /element\.textOutlineWidth \* scale/);
+  assert.match(exportSource, /context\.lineJoin = "round"/);
+  assert.match(exportSource, /context\.lineCap = "round"/);
+  assert.match(exportSource, /context\.shadowBlur = Math\.max/);
+
+  const calls = [];
+  const context = {
+    beginPath() {},
+    arc() {},
+    fill() {},
+    fillRect() {},
+    save() {},
+    restore() {},
+    translate() {},
+    rotate() {},
+    measureText(value) { return { width: value.length * 10 }; },
+    createLinearGradient() {
+      const stops = [];
+      return {
+        stops,
+        addColorStop(offset, color) { stops.push([offset, color]); },
+      };
+    },
+    fillText(...args) { calls.push(["fillText", ...args]); },
+    strokeText(...args) { calls.push(["strokeText", ...args]); },
+    set fillStyle(value) { calls.push(["fillStyle", value]); },
+    set strokeStyle(value) { calls.push(["strokeStyle", value]); },
+    set lineWidth(value) { calls.push(["lineWidth", value]); },
+  };
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => context,
+    toBlob(callback, type) {
+      calls.push(["toBlob", type]);
+      callback(new Blob(["png"]));
+    },
+  };
+  const originalDocument = globalThis.document;
+  globalThis.document = { createElement: () => canvas };
+  try {
+    await canvasExport.exportCanvasToPng([
+      {
+        id: "text-outline",
+        type: "text",
+        text: "Hi",
+        fontSize: 24,
+        fontWeight: 600,
+        color: "#29251f",
+        textOutlineColor: "#ffffff",
+        textOutlineWidth: 6,
+        holoEnabled: true,
+        backgroundColor: "transparent",
+        borderColor: "#2d2923",
+        borderWidth: 0,
+        borderRadius: 8,
+        textAlign: "left",
+        x: 100,
+        y: 100,
+        width: 120,
+        height: 60,
+        rotation: 0,
+        zIndex: 1,
+        createdAt: 1,
+      },
+    ]);
+    assert.equal(calls.some(([name]) => name === "strokeText"), true);
+    assert.equal(
+      calls.some(([name, value]) => name === "strokeStyle" && value === "#ffffff"),
+      true,
+    );
+    assert.equal(
+      calls.some(([name, value]) => name === "lineWidth" && value === 12),
+      true,
+    );
+    assert.equal(
+      calls.some(
+        ([name, value]) =>
+          name === "strokeStyle" && value && value.stops?.length === 6,
+      ),
+      true,
+    );
+    assert.equal(calls.some(([name]) => name === "fillText"), true);
   } finally {
     globalThis.document = originalDocument;
   }

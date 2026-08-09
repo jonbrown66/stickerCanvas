@@ -12,7 +12,7 @@ import type {
 import { Icon } from "./Icon";
 
 type EditableElement = CanvasTextElement | CanvasShapeElement;
-type Flyout = "font-size" | "border-width" | null;
+type Flyout = "font-size" | "border-width" | "text-outline-width" | null;
 
 interface CanvasPropertiesToolbarProps {
   element: EditableElement;
@@ -23,11 +23,17 @@ interface CanvasPropertiesToolbarProps {
 
 interface ColorInputProps {
   label: string;
+  visibleLabel?: string;
   value: string;
   onChange: (value: string, commit: boolean) => void;
 }
 
-function ColorInput({ label, value, onChange }: ColorInputProps) {
+function ColorInput({
+  label,
+  visibleLabel = label,
+  value,
+  onChange,
+}: ColorInputProps) {
   return (
     <label className="canvas-style-color" title={label}>
       <input
@@ -37,7 +43,14 @@ function ColorInput({ label, value, onChange }: ColorInputProps) {
         onChange={(event) => onChange(event.currentTarget.value, false)}
         onBlur={(event) => onChange(event.currentTarget.value, true)}
       />
-      <span style={{ backgroundColor: value }} aria-hidden="true" />
+      <span
+        className="canvas-style-color-dot"
+        style={{ backgroundColor: value }}
+        aria-hidden="true"
+      />
+      <span className="sticker-vtoolbar-label" aria-hidden="true">
+        {visibleLabel}
+      </span>
     </label>
   );
 }
@@ -61,6 +74,8 @@ export function CanvasPropertiesToolbar({
   const borderEnabled = isText ? element.borderWidth > 0 : true;
   const borderColor = isText ? element.borderColor : element.strokeColor;
   const borderWidth = isText ? element.borderWidth : element.strokeWidth;
+  const textOutlineEnabled = isText && element.textOutlineWidth > 0;
+  const textHoloEnabled = isText && element.holoEnabled;
 
   const stopEvent = (
     event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>,
@@ -74,7 +89,7 @@ export function CanvasPropertiesToolbar({
 
   return (
     <div
-      className="sticker-vertical-toolbar canvas-element-toolbar"
+      className="sticker-vertical-toolbar canvas-element-toolbar sticker-labeled-toolbar"
       data-placement={placement}
       data-canvas-ui
       onPointerDown={stopEvent}
@@ -92,6 +107,7 @@ export function CanvasPropertiesToolbar({
               onClick={() => toggleFlyout("font-size")}
             >
               <Icon name="text" />
+              <span className="sticker-vtoolbar-label">Size</span>
             </button>
             {activeFlyout === "font-size" ? (
               <label
@@ -143,6 +159,7 @@ export function CanvasPropertiesToolbar({
               }
             >
               <Icon name="bold" />
+              <span className="sticker-vtoolbar-label">Bold</span>
             </button>
           </div>
           <div className="sticker-vtoolbar-item">
@@ -162,14 +179,117 @@ export function CanvasPropertiesToolbar({
               }}
             >
               <Icon name={`align-${element.textAlign}`} />
+              <span className="sticker-vtoolbar-label">Align</span>
             </button>
           </div>
           <div className="sticker-vtoolbar-item">
             <ColorInput
               label="Text color"
+              visibleLabel="Text"
               value={element.color}
               onChange={(color, commit) => onChange({ color }, commit)}
             />
+          </div>
+          <div className="sticker-vtoolbar-item">
+            <button
+              type="button"
+              className="sticker-vtoolbar-btn"
+              data-active={textOutlineEnabled}
+              aria-label={
+                textOutlineEnabled
+                  ? "Remove sticker outline"
+                  : "Add sticker outline"
+              }
+              title={
+                textOutlineEnabled
+                  ? "Remove sticker outline"
+                  : "Add sticker outline"
+              }
+              onClick={() =>
+                onChange(
+                  {
+                    textOutlineWidth: textOutlineEnabled
+                      ? 0
+                      : Math.min(48, Math.max(1, element.fontSize * 0.18)),
+                  },
+                  true,
+                )
+              }
+            >
+              <Icon name="sparkles" />
+              <span className="sticker-vtoolbar-label">Outline</span>
+            </button>
+          </div>
+          {textOutlineEnabled ? (
+            <div className="sticker-vtoolbar-item">
+              <ColorInput
+                label="Text outline color"
+                visibleLabel="Outline color"
+                value={element.textOutlineColor}
+                onChange={(color, commit) =>
+                  onChange({ textOutlineColor: color }, commit)
+                }
+              />
+            </div>
+          ) : null}
+          <div className="sticker-vtoolbar-item">
+            <button
+              type="button"
+              className="sticker-vtoolbar-btn"
+              data-active={activeFlyout === "text-outline-width"}
+              aria-label="Text outline width"
+              title="Text outline width"
+              onClick={() => toggleFlyout("text-outline-width")}
+            >
+              <Icon name="stroke" />
+              <span className="sticker-vtoolbar-label">Outline width</span>
+            </button>
+            {activeFlyout === "text-outline-width" ? (
+              <label
+                className="sticker-vtoolbar-flyout canvas-property-flyout"
+                title="Text outline width"
+              >
+                <input
+                  type="range"
+                  min={0}
+                  max={48}
+                  step={0.5}
+                  value={element.textOutlineWidth}
+                  aria-label="Text outline width"
+                  onChange={(event) =>
+                    onChange(
+                      { textOutlineWidth: Number(event.currentTarget.value) },
+                      false,
+                    )
+                  }
+                  onPointerUp={(event) =>
+                    onChange(
+                      { textOutlineWidth: Number(event.currentTarget.value) },
+                      true,
+                    )
+                  }
+                  onKeyUp={(event) =>
+                    onChange(
+                      { textOutlineWidth: Number(event.currentTarget.value) },
+                      true,
+                    )
+                  }
+                />
+              </label>
+            ) : null}
+          </div>
+          <div className="sticker-vtoolbar-item">
+            <button
+              type="button"
+              className="sticker-vtoolbar-btn"
+              data-active={textHoloEnabled}
+              aria-label={textHoloEnabled ? "Turn off Holo" : "Turn on Holo"}
+              title={textHoloEnabled ? "Turn off Holo" : "Turn on Holo"}
+              onClick={() => onChange({ holoEnabled: !element.holoEnabled }, true)}
+            >
+              <Icon name="sparkles" />
+              <span className="sticker-vtoolbar-label">Holo</span>
+            </button>
           </div>
           <div className="sticker-vtoolbar-divider" />
         </>
@@ -200,12 +320,14 @@ export function CanvasPropertiesToolbar({
           }
         >
           <Icon name="fill" />
+          <span className="sticker-vtoolbar-label">Fill</span>
         </button>
       </div>
       {backgroundEnabled ? (
         <div className="sticker-vtoolbar-item">
           <ColorInput
             label={isText ? "Background color" : "Fill color"}
+            visibleLabel="Fill color"
             value={backgroundColor}
             onChange={(value, commit) =>
               onChange(
@@ -230,6 +352,7 @@ export function CanvasPropertiesToolbar({
             }
           >
             <Icon name="stroke" />
+            <span className="sticker-vtoolbar-label">Box</span>
           </button>
         </div>
       ) : null}
@@ -237,6 +360,7 @@ export function CanvasPropertiesToolbar({
         <div className="sticker-vtoolbar-item">
           <ColorInput
             label="Border color"
+            visibleLabel={isText ? "Box color" : "Stroke color"}
             value={borderColor}
             onChange={(value, commit) =>
               onChange(
@@ -258,6 +382,9 @@ export function CanvasPropertiesToolbar({
           onClick={() => toggleFlyout("border-width")}
         >
           <Icon name="sliders" />
+          <span className="sticker-vtoolbar-label">
+            {isText ? "Box width" : "Stroke width"}
+          </span>
         </button>
         {activeFlyout === "border-width" ? (
           <label
@@ -306,6 +433,7 @@ export function CanvasPropertiesToolbar({
           onClick={onDelete}
         >
           <Icon name="trash" />
+          <span className="sticker-vtoolbar-label">Delete</span>
         </button>
       </div>
     </div>

@@ -34,6 +34,9 @@ export type CanvasTextElement = CanvasElementBase & {
   fontSize: number;
   fontWeight: 400 | 600 | 700;
   color: string;
+  textOutlineColor: string;
+  textOutlineWidth: number;
+  holoEnabled: boolean;
   backgroundColor: string;
   borderColor: string;
   borderWidth: number;
