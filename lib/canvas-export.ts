@@ -1,4 +1,5 @@
 import type {
+  CanvasBackgroundConfig,
   CanvasElement,
   CanvasShapeElement,
   CanvasSticker,
@@ -96,25 +97,84 @@ function getExportScale(bounds: Bounds) {
   );
 }
 
+function isColorDark(hexColor: string): boolean {
+  if (!hexColor.startsWith("#")) return false;
+  const hex = hexColor.replace("#", "");
+  const num = parseInt(hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex, 16);
+  if (Number.isNaN(num)) return false;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+}
+
 function drawPaperBackground(
   context: CanvasRenderingContext2D,
   bounds: Bounds,
   scale: number,
+  background?: CanvasBackgroundConfig,
 ) {
+  const bgStyle = background?.style ?? "dots";
+  if (bgStyle === "transparent") {
+    return;
+  }
+
   const width = (bounds.right - bounds.left) * scale;
   const height = (bounds.bottom - bounds.top) * scale;
+  const bgColor = background?.color ?? PAPER_COLOR;
   context.fillStyle = PAPER_COLOR;
+  if (bgColor !== PAPER_COLOR) {
+    context.fillStyle = bgColor;
+  }
   context.fillRect(0, 0, width, height);
-  context.fillStyle = DOT_COLOR;
+
+  if (bgStyle === "solid") {
+    return;
+  }
+
   const firstX = Math.floor(bounds.left / GRID_SIZE) * GRID_SIZE;
   const firstY = Math.floor(bounds.top / GRID_SIZE) * GRID_SIZE;
-  const dotRadius = Math.max(0.65, scale * 0.9);
-  for (let x = firstX; x <= bounds.right; x += GRID_SIZE) {
-    for (let y = firstY; y <= bounds.bottom; y += GRID_SIZE) {
-      context.beginPath();
-      context.arc((x - bounds.left) * scale, (y - bounds.top) * scale, dotRadius, 0, Math.PI * 2);
-      context.fill();
+
+  const isDark = isColorDark(bgColor);
+  const gridAlpha = background?.gridOpacity ?? 0.42;
+  const gridColor = isDark
+    ? `rgba(255, 255, 255, ${gridAlpha})`
+    : (background ? `rgba(60, 50, 40, ${gridAlpha})` : DOT_COLOR);
+
+  context.fillStyle = gridColor;
+  context.strokeStyle = gridColor;
+  context.lineWidth = Math.max(0.75, scale * 0.75);
+
+  if (bgStyle === "dots") {
+    const dotRadius = Math.max(0.65, scale * 0.9);
+    for (let x = firstX; x <= bounds.right; x += GRID_SIZE) {
+      for (let y = firstY; y <= bounds.bottom; y += GRID_SIZE) {
+        context.beginPath();
+        context.arc((x - bounds.left) * scale, (y - bounds.top) * scale, dotRadius, 0, Math.PI * 2);
+        context.fill();
+      }
     }
+  } else if (bgStyle === "grid") {
+    context.beginPath();
+    for (let x = firstX; x <= bounds.right; x += GRID_SIZE) {
+      const drawX = (x - bounds.left) * scale;
+      context.moveTo(drawX, 0);
+      context.lineTo(drawX, height);
+    }
+    for (let y = firstY; y <= bounds.bottom; y += GRID_SIZE) {
+      const drawY = (y - bounds.top) * scale;
+      context.moveTo(0, drawY);
+      context.lineTo(width, drawY);
+    }
+    context.stroke();
+  } else if (bgStyle === "lines") {
+    context.beginPath();
+    for (let y = firstY; y <= bounds.bottom; y += GRID_SIZE) {
+      const drawY = (y - bounds.top) * scale;
+      context.moveTo(0, drawY);
+      context.lineTo(width, drawY);
+    }
+    context.stroke();
   }
 }
 
@@ -214,7 +274,7 @@ function drawTextLine(
         context.shadowColor = "transparent";
         context.shadowBlur = 0;
         context.shadowOffsetY = 0;
-        context.globalAlpha = 0.84;
+        context.globalAlpha = Math.min(1, 0.84);
         context.strokeStyle = holo;
         context.strokeText(wrapped, drawX, y + index * lineHeight);
       }
@@ -416,6 +476,7 @@ async function drawElement(
 
 export async function exportCanvasToPng(
   elements: readonly CanvasElement[],
+  background?: CanvasBackgroundConfig,
 ): Promise<CanvasExportResult> {
   const ordered = [...elements].sort((left, right) => left.zIndex - right.zIndex);
   const bounds = getCanvasExportBounds(ordered);
@@ -427,7 +488,11 @@ export async function exportCanvasToPng(
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas export unavailable");
-  drawPaperBackground(context, bounds, scale);
+  if (background) {
+    drawPaperBackground(context, bounds, scale, background);
+  } else {
+    drawPaperBackground(context, bounds, scale);
+  }
   for (const element of ordered) {
     await drawElement(context, element, bounds, scale);
   }

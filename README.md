@@ -12,23 +12,31 @@ Sticker Canvas is a local-first creative canvas for turning photos into stickers
 - Remove photo backgrounds on demand in the browser.
 - Add sticker outlines and a subtle Holo / oil-film effect.
 - Export the current canvas as a PNG with its paper-dot background, images, text, shapes, and layout.
+- The chrome adapts to the viewport: desktop uses a top toolbar, mobile uses a bottom toolbar, and landscape phones move the Inspector to the side.
 - Save everything locally in the browser. No account or server upload is required.
 
 ## Quick Start
 
+This project uses pnpm 12.2.1. If pnpm is not installed on Windows, use the official standalone installer:
+
+```powershell
+$env:PNPM_VERSION="12.2.1"
+Invoke-WebRequest https://get.pnpm.io/install.ps1 -UseBasicParsing | Invoke-Expression
+```
+
 ```bash
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 Open the local URL shown by Vite, usually `http://localhost:5173`.
 
 ## Usage
 
-- Use the bottom toolbar to upload, open the camera, add text, draw shapes, or download the canvas.
+- Use the desktop top toolbar (mobile bottom toolbar) to upload, open the camera, add text, or draw shapes; the top-left menu contains history, new canvas, and download.
+- Use the bottom-right controls to zoom or fit all content.
 - Double-click text to edit it. Click outside the text box to finish editing.
-- Select an item to move, resize, rotate, delete, or adjust its appearance.
-- Select a photo and use the scissors action when you want to remove its background.
+- Select an image to open the compact right-side Inspector. Its icon toggles control Holo, background removal, rounded corners, shadow, and PNG save/delete; the sliders adjust outline, corner radius, shadow softness, and image size. Text and shapes keep their contextual element toolbar.
 - Download exports the current composition with the cream paper-dot background.
 
 ## Keyboard Shortcuts
@@ -47,11 +55,11 @@ Open the local URL shown by Vite, usually `http://localhost:5173`.
 
 | Command | Description |
 | --- | --- |
-| `npm run dev` | Start the development server |
-| `npm run typecheck` | Run TypeScript checks |
-| `npm run lint` | Run ESLint |
-| `npm test` | Build and run tests |
-| `npm run build` | Create a production build |
+| `pnpm run dev` | Start the development server |
+| `pnpm run typecheck` | Run TypeScript checks |
+| `pnpm run lint` | Run ESLint |
+| `pnpm test` | Build and run tests |
+| `pnpm run build` | Create a production build |
 
 ## Privacy
 

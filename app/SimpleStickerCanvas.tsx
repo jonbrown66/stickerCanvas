@@ -6,11 +6,14 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import type {
+  CanvasCropHandle,
   CanvasElement,
+  CanvasImageCrop,
   CanvasShapeKind,
   CanvasShapeElement,
   CanvasSticker,
@@ -19,6 +22,13 @@ import type {
   CanvasView,
   StickerGestureKind,
   StickerStyleOptions,
+} from "@/lib/canvas-types";
+import {
+  DEFAULT_IMAGE_CROP,
+  DEFAULT_STICKER_CORNER_RADIUS,
+  DEFAULT_STICKER_SHADOW_BLUR,
+  MIN_IMAGE_CROP_SIZE,
+  normalizeCanvasImageCrop,
 } from "@/lib/canvas-types";
 import { removeImageBackground } from "@/lib/background-removal";
 import {
@@ -31,32 +41,43 @@ import {
 import { convertHeicToJpeg, isHeicFile } from "@/lib/heic";
 import { createBackgroundDissolveTexture } from "@/lib/background-dissolve";
 import {
+  cropImageBlob,
   createOutlinedCutout,
   exportStickerWithOutline,
 } from "@/lib/sticker-image-processing";
 import { exportCanvasToPng } from "@/lib/canvas-export";
 import {
+  readCanvasBackground,
   readCanvasProjects,
   readStickerRecords,
   removeStickerRecord,
   replaceStickerRecords,
+  saveCanvasBackground,
   saveCanvasProject,
   saveStickerRecord,
   type CanvasProject,
 } from "@/lib/sticker-storage";
+import type { CanvasBackgroundConfig } from "@/lib/canvas-types";
 import { CameraCapture } from "./CameraCapture";
 import {
   BackgroundDissolveEffect,
   preloadBackgroundDissolveEffect,
   type BackgroundDissolveEffectData,
 } from "./BackgroundDissolveEffect";
+import { CanvasBackgroundInspector } from "./CanvasBackgroundInspector";
+import { CanvasBackgroundMenu } from "./CanvasBackgroundMenu";
 import { CanvasBottomToolbar } from "./CanvasBottomToolbar";
 import { CanvasElementItem } from "./CanvasElementItem";
+import { CanvasInspector } from "./CanvasInspector";
+import { CanvasTopBar } from "./CanvasTopBar";
+import { CanvasZoomControls } from "./CanvasZoomControls";
 import { Icon } from "./Icon";
 import { StickerCanvasItem } from "./StickerCanvasItem";
 
 type StickerGesture = {
   kind: StickerGestureKind;
+  cropHandle?: CanvasCropHandle;
+  startCrop: CanvasImageCrop;
   pointerId: number;
   itemId: string;
   element: HTMLElement;
@@ -74,6 +95,11 @@ type PointerSample = {
   clientX: number;
   clientY: number;
   pointerId: number;
+};
+
+type CanvasDropPoint = {
+  clientX: number;
+  clientY: number;
 };
 
 type ShapeDrawingGesture = {
@@ -98,6 +124,8 @@ const EXAMPLE_GUIDE_STICKER_ID = "example-guide-sticker-v1";
 const EXAMPLE_GUIDE_STICKER_URL = `${import.meta.env.BASE_URL}onboarding-guide-sticker-graffiti-en.png`;
 const MIN_ZOOM = 0.08;
 const MAX_ZOOM = 6;
+const DROP_STACK_OFFSET = 32;
+const NOTICE_DURATION_MS = 4_200;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -107,12 +135,142 @@ function isShapeTool(tool: CanvasTool): tool is CanvasShapeKind {
   return tool !== "select" && tool !== "text";
 }
 
+function isSupportedImageFile(file: File) {
+  return (
+    file.type.startsWith("image/") ||
+    /\.(heic|heif|jpe?g|png|webp)$/i.test(file.name)
+  );
+}
+
+function isFileTransfer(dataTransfer: DataTransfer) {
+  return (
+    dataTransfer.files.length > 0 ||
+    Array.from(dataTransfer.items).some((item) => item.kind === "file") ||
+    Array.from(dataTransfer.types).includes("Files")
+  );
+}
+
+function getDroppedFiles(dataTransfer: DataTransfer) {
+  const files = Array.from(dataTransfer.files);
+  if (files.length) return files;
+  return Array.from(dataTransfer.items)
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+}
+
 function previewSticker(element: HTMLElement, sticker: CanvasElement) {
   const width = `${sticker.width}px`;
   const height = `${sticker.height}px`;
   if (element.style.width !== width) element.style.width = width;
   if (element.style.height !== height) element.style.height = height;
   element.style.transform = `translate3d(${sticker.x - sticker.width / 2}px, ${sticker.y - sticker.height / 2}px, 0) rotate(${sticker.rotation}deg)`;
+  if (sticker.type === "image") {
+    const crop = normalizeCanvasImageCrop(sticker.crop) ?? DEFAULT_IMAGE_CROP;
+    element.style.setProperty(
+      "--image-crop-left",
+      `${-(crop.x / crop.width) * 100}%`,
+    );
+    element.style.setProperty(
+      "--image-crop-top",
+      `${-(crop.y / crop.height) * 100}%`,
+    );
+    element.style.setProperty(
+      "--image-crop-width",
+      `${(1 / crop.width) * 100}%`,
+    );
+    element.style.setProperty(
+      "--image-crop-height",
+      `${(1 / crop.height) * 100}%`,
+    );
+    element.dataset.cropped =
+      crop.x > 0 ||
+      crop.y > 0 ||
+      crop.width < 1 ||
+      crop.height < 1
+        ? "true"
+        : "false";
+  }
+}
+
+function getImageCrop(value: unknown): CanvasImageCrop {
+  return normalizeCanvasImageCrop(value) ?? DEFAULT_IMAGE_CROP;
+}
+
+function updateCropGesture(
+  gesture: StickerGesture,
+  sample: PointerSample,
+  zoom: number,
+): CanvasSticker | null {
+  if (
+    gesture.kind !== "crop" ||
+    gesture.start.type !== "image" ||
+    !gesture.cropHandle
+  ) {
+    return null;
+  }
+
+  const start = gesture.start;
+  const angle = (start.rotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const deltaX = (sample.clientX - gesture.centerX) / zoom;
+  const deltaY = (sample.clientY - gesture.centerY) / zoom;
+  const localX = deltaX * cos + deltaY * sin + start.width / 2;
+  const localY = -deltaX * sin + deltaY * cos + start.height / 2;
+  const minWidth = Math.min(
+    start.width,
+    Math.max(
+      1 / zoom,
+      Math.min(24 / zoom, start.width * 0.08),
+    ),
+  );
+  const minHeight = Math.min(
+    start.height,
+    Math.max(
+      1 / zoom,
+      Math.min(24 / zoom, start.height * 0.08),
+    ),
+  );
+  let left = 0;
+  let top = 0;
+  let right = start.width;
+  let bottom = start.height;
+
+  if (gesture.cropHandle.includes("w")) {
+    left = clamp(localX, 0, start.width - minWidth);
+  } else if (gesture.cropHandle.includes("e")) {
+    right = clamp(localX, minWidth, start.width);
+  }
+  if (gesture.cropHandle.includes("n")) {
+    top = clamp(localY, 0, start.height - minHeight);
+  } else if (gesture.cropHandle.includes("s")) {
+    bottom = clamp(localY, minHeight, start.height);
+  }
+
+  const startCrop = gesture.startCrop;
+  const crop = normalizeCanvasImageCrop({
+    x: startCrop.x + (left / start.width) * startCrop.width,
+    y: startCrop.y + (top / start.height) * startCrop.height,
+    width: ((right - left) / start.width) * startCrop.width,
+    height: ((bottom - top) / start.height) * startCrop.height,
+  }) ?? {
+    x: 0,
+    y: 0,
+    width: MIN_IMAGE_CROP_SIZE,
+    height: MIN_IMAGE_CROP_SIZE,
+  };
+  const offsetX = (left + right) / 2 - start.width / 2;
+  const offsetY = (top + bottom) / 2 - start.height / 2;
+
+  return {
+    ...start,
+    x: start.x + offsetX * cos - offsetY * sin,
+    y: start.y + offsetX * sin + offsetY * cos,
+    width: right - left,
+    height: bottom - top,
+    crop,
+  };
 }
 
 async function readImageAspect(blob: Blob) {
@@ -164,7 +322,7 @@ async function preloadImageUrl(url: string) {
 
 async function fetchSampleImage(url: string) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error("Sample unavailable");
+  if (!response.ok) throw new Error("示例不可用");
   return response.blob();
 }
 
@@ -187,6 +345,10 @@ async function createDefaultCanvasStickers() {
       rotation: -4,
       zIndex: 1,
       createdAt,
+      cornerRadius: DEFAULT_STICKER_CORNER_RADIUS,
+      cornerRadiusEnabled: true,
+      shadowEnabled: true,
+      shadowBlur: DEFAULT_STICKER_SHADOW_BLUR,
     },
     {
       id: EXAMPLE_GUIDE_STICKER_ID,
@@ -200,13 +362,35 @@ async function createDefaultCanvasStickers() {
       rotation: 2,
       zIndex: 2,
       oilFilmEnabled: true,
+      cornerRadius: DEFAULT_STICKER_CORNER_RADIUS,
+      cornerRadiusEnabled: true,
+      shadowEnabled: true,
+      shadowBlur: DEFAULT_STICKER_SHADOW_BLUR,
       createdAt,
     },
   ] satisfies CanvasSticker[];
 }
 
+function applyViewTransform(
+  world: HTMLElement | null,
+  grid: HTMLElement | null,
+  v: CanvasView,
+) {
+  if (world) {
+    world.style.transform = `translate3d(calc(50vw - ${v.x * v.zoom}px), calc(50dvh - ${v.y * v.zoom}px), 0) scale(${v.zoom})`;
+    world.style.setProperty("--simple-control-scale", String(1 / v.zoom));
+  }
+  if (grid) {
+    grid.style.setProperty("--grid-size", `${28 * v.zoom}px`);
+    grid.style.setProperty("--grid-x", `${-v.x * v.zoom}px`);
+    grid.style.setProperty("--grid-y", `${-v.y * v.zoom}px`);
+  }
+}
+
 export function SimpleStickerCanvas() {
   const viewportRef = useRef<HTMLElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const stickersRef = useRef<CanvasElement[]>([]);
@@ -228,6 +412,7 @@ export function SimpleStickerCanvas() {
   const gestureRef = useRef<StickerGesture | null>(null);
   const shapeDrawingRef = useRef<ShapeDrawingGesture | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const externalDragDepthRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const pointerSampleRef = useRef<PointerSample | null>(null);
   const pinchRef = useRef<{
@@ -256,17 +441,66 @@ export function SimpleStickerCanvas() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [isExternalDragActive, setIsExternalDragActive] = useState(false);
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
+  const [cropEditingId, setCropEditingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawingId, setDrawingId] = useState<string | null>(null);
+  const [historyPosition, setHistoryPosition] = useState({
+    index: -1,
+    length: 0,
+  });
+  const [background, setBackground] =
+    useState<CanvasBackgroundConfig>(readCanvasBackground);
+  const [backgroundMenuOpen, setBackgroundMenuOpen] = useState(false);
+  const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(false);
 
-  const pushHistory = useCallback((nextStickers: CanvasElement[]) => {
-    historyRef.current = appendStickerHistory(
-      historyRef.current,
-      nextStickers,
-    );
+  const updateBackground = useCallback((next: CanvasBackgroundConfig) => {
+    setBackground(next);
+    saveCanvasBackground(next);
   }, []);
+
+  useEffect(() => {
+    if (
+      !notice ||
+      isImporting ||
+      isExporting ||
+      isCreatingCanvas ||
+      processingStickerId
+    ) {
+      return;
+    }
+
+    const noticeTimer = window.setTimeout(() => {
+      setNotice((current) => (current === notice ? "" : current));
+    }, NOTICE_DURATION_MS);
+
+    return () => window.clearTimeout(noticeTimer);
+  }, [
+    isCreatingCanvas,
+    isExporting,
+    isImporting,
+    notice,
+    processingStickerId,
+  ]);
+
+  const replaceHistory = useCallback((nextHistory: StickerHistory) => {
+    historyRef.current = nextHistory;
+    setHistoryPosition({
+      index: nextHistory.index,
+      length: nextHistory.entries.length,
+    });
+  }, []);
+
+  const pushHistory = useCallback(
+    (nextStickers: CanvasElement[]) => {
+      replaceHistory(
+        appendStickerHistory(historyRef.current, nextStickers),
+      );
+    },
+    [replaceHistory],
+  );
 
   const applyHistorySnapshot = useCallback(
     (snapshot: StickerHistory["entries"][number]) => {
@@ -287,7 +521,7 @@ export function SimpleStickerCanvas() {
         0,
       );
       void replaceStickerRecords(restored.stickers).catch(() =>
-        setNotice("History could not be saved"),
+        setNotice("历史记录保存失败"),
       );
     },
     [],
@@ -296,16 +530,16 @@ export function SimpleStickerCanvas() {
   const undo = useCallback(() => {
     const movement = moveStickerHistory(historyRef.current, -1);
     if (!movement) return;
-    historyRef.current = movement.history;
+    replaceHistory(movement.history);
     applyHistorySnapshot(movement.snapshot);
-  }, [applyHistorySnapshot]);
+  }, [applyHistorySnapshot, replaceHistory]);
 
   const redo = useCallback(() => {
     const movement = moveStickerHistory(historyRef.current, 1);
     if (!movement) return;
-    historyRef.current = movement.history;
+    replaceHistory(movement.history);
     applyHistorySnapshot(movement.snapshot);
-  }, [applyHistorySnapshot]);
+  }, [applyHistorySnapshot, replaceHistory]);
 
   const replaceStickers = useCallback(
     (
@@ -314,14 +548,11 @@ export function SimpleStickerCanvas() {
         | ((current: CanvasElement[]) => CanvasElement[]),
       recordHistory = true,
     ) => {
-      setStickers((current) => {
-        const next = typeof update === "function" ? update(current) : update;
-        stickersRef.current = next;
-        if (recordHistory) {
-          pushHistory(next);
-        }
-        return next;
-      });
+      const current = stickersRef.current;
+      const next = typeof update === "function" ? update(current) : update;
+      stickersRef.current = next;
+      if (recordHistory) pushHistory(next);
+      setStickers(next);
     },
     [pushHistory],
   );
@@ -335,6 +566,17 @@ export function SimpleStickerCanvas() {
     selectedIdRef.current = id;
     setSelectedId(id);
   }, []);
+
+  const toggleCropMode = useCallback(
+    (stickerId: string) => {
+      setEditingId(null);
+      selectSticker(stickerId);
+      setCropEditingId((current) =>
+        current === stickerId ? null : stickerId,
+      );
+    },
+    [selectSticker],
+  );
 
   const commitPendingCutout = useCallback(
     (effectId: string) => {
@@ -388,10 +630,10 @@ export function SimpleStickerCanvas() {
       }
       if (commit) {
         delete saveTimerRef.current[stickerId];
-        void saveStickerRecord(updated).catch(() => setNotice("Save failed"));
+        void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
       } else {
         saveTimerRef.current[stickerId] = window.setTimeout(() => {
-          void saveStickerRecord(updated).catch(() => setNotice("Save failed"));
+          void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
           delete saveTimerRef.current[stickerId];
         }, 300);
       }
@@ -428,11 +670,11 @@ export function SimpleStickerCanvas() {
       }
       if (commit) {
         delete saveTimerRef.current[elementId];
-        void saveStickerRecord(updated).catch(() => setNotice("Save failed"));
+        void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
       } else {
         saveTimerRef.current[elementId] = window.setTimeout(() => {
           void saveStickerRecord(updated).catch(() =>
-            setNotice("Save failed"),
+            setNotice("保存失败"),
           );
           delete saveTimerRef.current[elementId];
         }, 240);
@@ -508,6 +750,10 @@ export function SimpleStickerCanvas() {
                 rotation: 2,
                 zIndex: 2,
                 oilFilmEnabled: true,
+                cornerRadius: DEFAULT_STICKER_CORNER_RADIUS,
+                cornerRadiusEnabled: true,
+                shadowEnabled: true,
+                shadowBlur: DEFAULT_STICKER_SHADOW_BLUR,
                 createdAt: Date.now(),
               }
             : existingGuide && hasOnlyDefaultSamples
@@ -543,7 +789,7 @@ export function SimpleStickerCanvas() {
             return;
           }
           replaceStickers(defaults, false);
-          historyRef.current = createStickerHistory(defaults);
+          replaceHistory(createStickerHistory(defaults));
           const updatedProject = {
             ...currentProject,
             updatedAt: Date.now(),
@@ -570,7 +816,7 @@ export function SimpleStickerCanvas() {
           );
         if (!disposed) {
           replaceStickers(restored, false);
-          historyRef.current = createStickerHistory(restored);
+          replaceHistory(createStickerHistory(restored));
           const updatedProject = {
             ...currentProject,
             updatedAt: Date.now(),
@@ -584,7 +830,7 @@ export function SimpleStickerCanvas() {
           );
         }
       })
-      .catch(() => setNotice("Restore failed"));
+      .catch(() => setNotice("恢复画布失败"));
 
     return () => {
       disposed = true;
@@ -597,7 +843,7 @@ export function SimpleStickerCanvas() {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
       });
     };
-  }, [replaceStickers]);
+  }, [replaceHistory, replaceStickers]);
 
   const persistView = useCallback((next = viewRef.current) => {
     try {
@@ -630,8 +876,8 @@ export function SimpleStickerCanvas() {
 
   const cutoutSticker = useCallback(
     async (sticker: CanvasSticker) => {
-      if (sticker.isCutout) {
-        setNotice("Already cut out");
+      if (sticker.isCutout && !sticker.originalImage) {
+        setNotice("原始图片不可用");
         return;
       }
       if (processingRef.current) return;
@@ -642,7 +888,40 @@ export function SimpleStickerCanvas() {
       setProcessingStickerId(sticker.id);
       let createdUrl: string | null = null;
       try {
-        const result = await removeImageBackground(sticker.image);
+        if (sticker.isCutout && sticker.originalImage) {
+          const restoredImage = sticker.crop
+            ? await cropImageBlob(sticker.originalImage, sticker.crop)
+            : sticker.originalImage;
+          const ratio = await readImageAspect(restoredImage);
+          const restoredUrl = URL.createObjectURL(restoredImage);
+          createdUrl = restoredUrl;
+          await preloadImageUrl(restoredUrl);
+          const restored: CanvasSticker = {
+            ...sticker,
+            image: restoredImage,
+            url: restoredUrl,
+            height: sticker.width / ratio,
+            isCutout: false,
+            crop: undefined,
+            originalImage: restoredImage,
+          };
+          await saveStickerRecord(restored);
+          replaceStickers((current) =>
+            current.map((currentSticker) =>
+              currentSticker.id === sticker.id ? restored : currentSticker,
+            ),
+          );
+          URL.revokeObjectURL(sticker.url);
+          createdUrl = null;
+          setNotice("已恢复原图背景");
+          return;
+        }
+
+        const sourceImage = sticker.originalImage ?? sticker.image;
+        const sourceImageForCutout = sticker.crop
+          ? await cropImageBlob(sourceImage, sticker.crop)
+          : sourceImage;
+        const result = await removeImageBackground(sourceImageForCutout);
 
         const [cutout, dissolveTexture] = await Promise.all([
           createOutlinedCutout(
@@ -651,7 +930,7 @@ export function SimpleStickerCanvas() {
             result.height,
           ),
           createBackgroundDissolveTexture(
-            sticker.image,
+            sourceImageForCutout,
             result.pixels,
             result.width,
             result.height,
@@ -673,6 +952,8 @@ export function SimpleStickerCanvas() {
           outlineWidth: (sticker.outlineWidth && sticker.outlineWidth > 0) ? sticker.outlineWidth : 8,
           outlineColor: sticker.outlineColor || "#ffffff",
           isCutout: true,
+          crop: undefined,
+          originalImage: sourceImageForCutout,
         };
 
         await saveStickerRecord(updated);
@@ -707,13 +988,13 @@ export function SimpleStickerCanvas() {
           );
           URL.revokeObjectURL(sticker.url);
         }
-        setNotice("Cutout ready");
+        setNotice("抠图完成");
         createdUrl = null;
       } catch (error) {
         if (createdUrl) URL.revokeObjectURL(createdUrl);
         console.error("Could not cutout sticker.", error);
         setNotice(
-          error instanceof Error ? error.message : "Cutout failed",
+          error instanceof Error ? error.message : "抠图失败",
         );
       } finally {
         processingRef.current = false;
@@ -724,24 +1005,23 @@ export function SimpleStickerCanvas() {
   );
 
   const processFile = useCallback(
-    async (file?: File) => {
+    async (file?: File, dropPoint?: CanvasDropPoint) => {
       if (!file || processingRef.current) return;
-      if (
-        !file.type.startsWith("image/") &&
-        !/\.(heic|heif|jpe?g|png|webp)$/i.test(file.name)
-      ) {
-        setNotice("Choose an image");
+      if (!isSupportedImageFile(file)) {
+        setNotice("请选择图片");
         return;
       }
       if (file.size > 20_000_000) {
-        setNotice("Max size: 20 MB");
+        setNotice("图片不能超过 20 MB");
         return;
       }
 
       setCameraOpen(false);
+      setActiveTool("select");
+      setShapeMenuOpen(false);
       processingRef.current = true;
       setIsImporting(true);
-      setNotice("Preparing photo…");
+      setNotice("正在准备图片…");
       let createdUrl: string | null = null;
       try {
         const image = isHeicFile(file) ? await convertHeicToJpeg(file) : file;
@@ -751,14 +1031,29 @@ export function SimpleStickerCanvas() {
         createdUrl = url;
 
         const rect = viewportRef.current?.getBoundingClientRect();
+        const currentView = viewRef.current;
         const maximumWidth = Math.min(380, (rect?.width ?? 600) * 0.52);
         const maximumHeight = Math.min(430, (rect?.height ?? 800) * 0.52);
-        let width = maximumWidth / viewRef.current.zoom;
+        let width = maximumWidth / currentView.zoom;
         let height = width / aspect;
-        if (height > maximumHeight / viewRef.current.zoom) {
-          height = maximumHeight / viewRef.current.zoom;
+        if (height > maximumHeight / currentView.zoom) {
+          height = maximumHeight / currentView.zoom;
           width = height * aspect;
         }
+
+        const position =
+          dropPoint && rect
+            ? {
+                x:
+                  currentView.x +
+                  (dropPoint.clientX - rect.left - rect.width / 2) /
+                    currentView.zoom,
+                y:
+                  currentView.y +
+                  (dropPoint.clientY - rect.top - rect.height / 2) /
+                    currentView.zoom,
+              }
+            : { x: currentView.x, y: currentView.y };
 
         const topZ = stickersRef.current.reduce(
           (largest, s) => Math.max(largest, s.zIndex),
@@ -772,8 +1067,8 @@ export function SimpleStickerCanvas() {
           url,
           width,
           height,
-          x: viewRef.current.x,
-          y: viewRef.current.y,
+          x: position.x,
+          y: position.y,
           rotation: 0,
           zIndex: topZ + 1,
           createdAt: Date.now(),
@@ -781,6 +1076,10 @@ export function SimpleStickerCanvas() {
           outlineColor: "#ffffff",
           oilFilmEnabled: false,
           isCutout: false,
+          cornerRadius: DEFAULT_STICKER_CORNER_RADIUS,
+          cornerRadiusEnabled: true,
+          shadowEnabled: true,
+          shadowBlur: DEFAULT_STICKER_SHADOW_BLUR,
         };
 
         await saveStickerRecord(sticker);
@@ -794,14 +1093,14 @@ export function SimpleStickerCanvas() {
             ),
           650,
         );
-        setNotice("Photo added — use Cutout when ready");
+        setNotice("图片已添加");
       } catch (error) {
         if (createdUrl) {
           URL.revokeObjectURL(createdUrl);
         }
         console.error("Could not load image.", error);
         setNotice(
-          error instanceof Error ? error.message : "Image failed to load",
+          error instanceof Error ? error.message : "图片加载失败",
         );
       } finally {
         processingRef.current = false;
@@ -813,11 +1112,115 @@ export function SimpleStickerCanvas() {
     [replaceStickers, selectSticker],
   );
 
+  const clearExternalDrag = useCallback(() => {
+    externalDragDepthRef.current = 0;
+    setIsExternalDragActive(false);
+  }, []);
+
+  const handleExternalDragEnter = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (
+        !isFileTransfer(event.dataTransfer) ||
+        processingRef.current ||
+        isImporting ||
+        isExporting ||
+        isCreatingCanvas
+      ) {
+        return;
+      }
+      event.preventDefault();
+      externalDragDepthRef.current += 1;
+      if (externalDragDepthRef.current === 1) {
+        setIsExternalDragActive(true);
+      }
+    },
+    [isCreatingCanvas, isExporting, isImporting],
+  );
+
+  const handleExternalDragOver = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (
+        !isFileTransfer(event.dataTransfer) ||
+        processingRef.current ||
+        isImporting ||
+        isExporting ||
+        isCreatingCanvas
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    [isCreatingCanvas, isExporting, isImporting],
+  );
+
+  const handleExternalDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      if (!isFileTransfer(event.dataTransfer)) return;
+      externalDragDepthRef.current = Math.max(
+        0,
+        externalDragDepthRef.current - 1,
+      );
+      if (externalDragDepthRef.current === 0) {
+        setIsExternalDragActive(false);
+      }
+    },
+    [],
+  );
+
+  const handleExternalDrop = useCallback(
+    async (event: ReactDragEvent<HTMLElement>) => {
+      if (!isFileTransfer(event.dataTransfer)) return;
+      event.preventDefault();
+      clearExternalDrag();
+      if (
+        processingRef.current ||
+        isImporting ||
+        isExporting ||
+        isCreatingCanvas
+      ) {
+        return;
+      }
+
+      const activeElement = document.activeElement;
+      if (activeElement instanceof HTMLTextAreaElement) {
+        activeElement.blur();
+      }
+
+      const files = getDroppedFiles(event.dataTransfer).filter(
+        isSupportedImageFile,
+      );
+      if (!files.length) {
+        setNotice("请选择图片");
+        return;
+      }
+
+      const dropPoint = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
+      for (const [index, file] of files.entries()) {
+        await processFile(file, {
+          clientX: dropPoint.clientX + index * DROP_STACK_OFFSET,
+          clientY: dropPoint.clientY + index * DROP_STACK_OFFSET,
+        });
+      }
+    },
+    [
+      clearExternalDrag,
+      isCreatingCanvas,
+      isExporting,
+      isImporting,
+      processFile,
+    ],
+  );
+
   const startStickerGesture = useCallback(
     (
       event: ReactPointerEvent<HTMLElement>,
       sticker: CanvasElement,
       kind: StickerGestureKind,
+      cropHandle?: CanvasCropHandle,
     ) => {
       if (event.button !== 0) return;
       event.preventDefault();
@@ -844,8 +1247,12 @@ export function SimpleStickerCanvas() {
         sticker.zIndex === topZ ? sticker : { ...sticker, zIndex: topZ + 1 };
       if (lifted !== sticker) updateSticker(sticker.id, { zIndex: lifted.zIndex });
       selectSticker(sticker.id);
+      if (kind !== "crop") setCropEditingId(null);
       gestureRef.current = {
         kind,
+        cropHandle,
+        startCrop:
+          lifted.type === "image" ? getImageCrop(lifted.crop) : DEFAULT_IMAGE_CROP,
         pointerId: event.pointerId,
         itemId: sticker.id,
         element,
@@ -864,6 +1271,9 @@ export function SimpleStickerCanvas() {
         start: lifted,
         latest: lifted,
       };
+      if (kind === "move") {
+        element.dataset.moving = "true";
+      }
       event.currentTarget.setPointerCapture(event.pointerId);
     },
     [selectSticker, updateSticker],
@@ -884,6 +1294,10 @@ export function SimpleStickerCanvas() {
             gesture.start.y +
             (sample.clientY - gesture.startClientY) / viewRef.current.zoom,
         };
+      } else if (gesture.kind === "crop") {
+        latest =
+          updateCropGesture(gesture, sample, viewRef.current.zoom) ??
+          gesture.start;
       } else if (gesture.kind === "resize") {
         const distance = Math.max(
           1,
@@ -929,6 +1343,9 @@ export function SimpleStickerCanvas() {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
+      if (gesture.kind === "move") {
+        delete gesture.element.dataset.moving;
+      }
       pointerSampleRef.current = null;
       gestureRef.current = null;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -939,7 +1356,7 @@ export function SimpleStickerCanvas() {
       );
       replaceStickers(next, false);
       void saveStickerRecord(gesture.latest).catch(() =>
-        setNotice("Save failed"),
+        setNotice("保存失败"),
       );
       pushHistory(next);
     },
@@ -955,6 +1372,7 @@ export function SimpleStickerCanvas() {
       void removeStickerRecord(sticker.id)
         .then(() => {
           selectSticker(null);
+          setCropEditingId(null);
           setEditingId((current) =>
             current === sticker.id ? null : current,
           );
@@ -965,9 +1383,81 @@ export function SimpleStickerCanvas() {
             window.setTimeout(() => URL.revokeObjectURL(sticker.url), 0);
           }
         })
-        .catch(() => setNotice("Delete failed"));
+        .catch(() => setNotice("删除失败"));
     },
     [replaceStickers, selectSticker],
+  );
+
+  const duplicateElement = useCallback(
+    async (element: CanvasElement) => {
+      const topZ = stickersRef.current.reduce(
+        (largest, current) => Math.max(largest, current.zIndex),
+        0,
+      );
+      const offset = Math.max(20, 28 / viewRef.current.zoom);
+      const id = crypto.randomUUID();
+      const duplicate: CanvasElement =
+        element.type === "image"
+          ? {
+              ...element,
+              id,
+              x: element.x + offset,
+              y: element.y + offset,
+              zIndex: topZ + 1,
+              createdAt: Date.now(),
+              url: URL.createObjectURL(element.image),
+            }
+          : {
+              ...element,
+              id,
+              x: element.x + offset,
+              y: element.y + offset,
+              zIndex: topZ + 1,
+              createdAt: Date.now(),
+            };
+
+      replaceStickers((current) => [...current, duplicate]);
+      selectSticker(duplicate.id);
+      try {
+        await saveStickerRecord(duplicate);
+      } catch {
+        setNotice("复制失败");
+      }
+    },
+    [replaceStickers, selectSticker],
+  );
+
+  const changeLayer = useCallback(
+    (
+      elementId: string,
+      action: "send-back" | "backward" | "forward" | "bring-front",
+    ) => {
+      const ordered = [...stickersRef.current].sort(
+        (left, right) => left.zIndex - right.zIndex,
+      );
+      const index = ordered.findIndex((element) => element.id === elementId);
+      if (index < 0) return;
+      const targetIndex =
+        action === "send-back"
+          ? 0
+          : action === "backward"
+            ? Math.max(0, index - 1)
+            : action === "forward"
+              ? Math.min(ordered.length - 1, index + 1)
+              : ordered.length - 1;
+      if (targetIndex === index) return;
+
+      const [moved] = ordered.splice(index, 1);
+      ordered.splice(targetIndex, 0, moved);
+      const next = ordered.map(
+        (element, zIndex) => ({ ...element, zIndex: zIndex + 1 }) as CanvasElement,
+      );
+      replaceStickers(next);
+      void Promise.all(next.map((element) => saveStickerRecord(element))).catch(
+        () => setNotice("图层调整失败"),
+      );
+    },
+    [replaceStickers],
   );
 
   const startElementEditing = useCallback(
@@ -1000,7 +1490,7 @@ export function SimpleStickerCanvas() {
       );
       setEditingId(null);
       void saveStickerRecord(updated).catch(() =>
-        setNotice("Save failed"),
+        setNotice("保存失败"),
       );
     },
     [deleteSticker, replaceStickers],
@@ -1067,7 +1557,7 @@ export function SimpleStickerCanvas() {
       setShapeMenuOpen(false);
       setEditingId(element.id);
       void saveStickerRecord(element).catch(() =>
-        setNotice("Save failed"),
+        setNotice("保存失败"),
       );
     },
     [replaceStickers, selectSticker],
@@ -1200,7 +1690,7 @@ export function SimpleStickerCanvas() {
         replaceStickers(next, false);
         pushHistory(next);
         void saveStickerRecord(drawing.latest).catch(() =>
-          setNotice("Save failed"),
+          setNotice("保存失败"),
         );
       }
       setActiveTool("select");
@@ -1214,7 +1704,13 @@ export function SimpleStickerCanvas() {
     const w = sticker.outlineWidth ?? 0;
     const color = sticker.outlineColor || "#ffffff";
     void exportStickerWithOutline(sticker.image, displayW, w, color, {
+      opacity: sticker.opacity,
       oilFilmEnabled: sticker.oilFilmEnabled,
+      cornerRadius: sticker.cornerRadius,
+      cornerRadiusEnabled: sticker.cornerRadiusEnabled,
+      shadowEnabled: sticker.shadowEnabled,
+      shadowBlur: sticker.shadowBlur,
+      crop: sticker.crop,
     })
       .then((png) => {
         const downloadUrl = URL.createObjectURL(png);
@@ -1229,18 +1725,20 @@ export function SimpleStickerCanvas() {
         anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
       })
-      .catch(() => setNotice("Download failed"));
+      .catch(() => setNotice("下载失败"));
   }, []);
 
   const exportCanvas = useCallback(async () => {
     if (!stickersRef.current.length) {
-      setNotice("Canvas is empty");
+      setNotice("画布为空");
       return;
     }
     setIsExporting(true);
     setNotice("");
     try {
-      const exported = await exportCanvasToPng(stickersRef.current);
+      const exported = background
+        ? await exportCanvasToPng(stickersRef.current, background)
+        : await exportCanvasToPng(stickersRef.current);
       const url = URL.createObjectURL(exported.blob);
       const anchor = document.createElement("a");
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -1252,12 +1750,12 @@ export function SimpleStickerCanvas() {
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
       setNotice(
-        error instanceof Error ? error.message : "Canvas export failed",
+        error instanceof Error ? error.message : "画布导出失败",
       );
     } finally {
       setIsExporting(false);
     }
-  }, []);
+  }, [background]);
 
   const downloadCanvas = useCallback(() => {
     const activeElement = document.activeElement;
@@ -1302,7 +1800,7 @@ export function SimpleStickerCanvas() {
       previous.forEach((sticker) => {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
       });
-      historyRef.current = createStickerHistory(defaults);
+      replaceHistory(createStickerHistory(defaults));
       localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
       localStorage.setItem(ACTIVE_CANVAS_KEY, nextProject.id);
       setCanvasProjects((current) => [
@@ -1317,14 +1815,21 @@ export function SimpleStickerCanvas() {
       setShapeMenuOpen(false);
       setEditingId(null);
       setDrawingId(null);
+      setCropEditingId(null);
       selectSticker(null);
-      setNotice("New canvas ready");
+      setNotice("新画布已准备好");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "New canvas failed");
+      setNotice(error instanceof Error ? error.message : "新建画布失败");
     } finally {
       setIsCreatingCanvas(false);
     }
-  }, [activeCanvasId, canvasProjects, replaceStickers, selectSticker]);
+  }, [
+    activeCanvasId,
+    canvasProjects,
+    replaceHistory,
+    replaceStickers,
+    selectSticker,
+  ]);
 
   const openCanvasProject = useCallback(
     async (projectId: string) => {
@@ -1369,7 +1874,7 @@ export function SimpleStickerCanvas() {
         previous.forEach((sticker) => {
           if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
         });
-        historyRef.current = createStickerHistory(restored);
+        replaceHistory(createStickerHistory(restored));
         localStorage.setItem(ACTIVE_CANVAS_KEY, openedProject.id);
         setCanvasProjects((current) =>
           current.map((project) =>
@@ -1386,15 +1891,22 @@ export function SimpleStickerCanvas() {
         setShapeMenuOpen(false);
         setEditingId(null);
         setDrawingId(null);
+        setCropEditingId(null);
         selectSticker(null);
-        setNotice(`${openedProject.name} opened`);
+        setNotice(`已打开「${openedProject.name}」`);
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "Canvas open failed");
+        setNotice(error instanceof Error ? error.message : "打开画布失败");
       } finally {
         setIsCreatingCanvas(false);
       }
     },
-    [activeCanvasId, canvasProjects, replaceStickers, selectSticker],
+    [
+      activeCanvasId,
+      canvasProjects,
+      replaceHistory,
+      replaceStickers,
+      selectSticker,
+    ],
   );
 
   useEffect(() => {
@@ -1411,6 +1923,7 @@ export function SimpleStickerCanvas() {
         setActiveTool("select");
         setShapeMenuOpen(false);
         setEditingId(null);
+        setCropEditingId(null);
         selectSticker(null);
         return;
       }
@@ -1495,7 +2008,7 @@ export function SimpleStickerCanvas() {
   const startViewportPointer = (event: ReactPointerEvent<HTMLElement>) => {
     if (
       editingId &&
-      !(event.target as HTMLElement).closest("textarea[aria-label='Edit text']")
+      !(event.target as HTMLElement).closest("textarea[aria-label='编辑文字']")
     ) {
       const activeElement = document.activeElement;
       if (activeElement instanceof HTMLTextAreaElement) {
@@ -1559,6 +2072,7 @@ export function SimpleStickerCanvas() {
       return;
     }
     event.preventDefault();
+    setCropEditingId(null);
     selectSticker(null);
     panRef.current = {
       pointerId: event.pointerId,
@@ -1593,21 +2107,25 @@ export function SimpleStickerCanvas() {
       );
       const middleX = (first.x + second.x) / 2;
       const middleY = (first.y + second.y) / 2;
-      updateView({
+      const nextView = {
         x: pinch.anchorX - (middleX - rect.left - rect.width / 2) / zoom,
         y: pinch.anchorY - (middleY - rect.top - rect.height / 2) / zoom,
         zoom,
-      });
+      };
+      viewRef.current = nextView;
+      applyViewTransform(worldRef.current, gridRef.current, nextView);
       return;
     }
     const pan = panRef.current;
     if (!pan || pan.pointerId !== event.pointerId) return;
-    updateView({
+    const nextView = {
       ...pan.view,
       x: pan.view.x - (event.clientX - pan.clientX) / pan.view.zoom,
       y: pan.view.y - (event.clientY - pan.clientY) / pan.view.zoom,
-    });
-  }, [updateView]);
+    };
+    viewRef.current = nextView;
+    applyViewTransform(worldRef.current, gridRef.current, nextView);
+  }, []);
 
   const moveGlobalPointer = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -1649,6 +2167,7 @@ export function SimpleStickerCanvas() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setView(viewRef.current);
     persistView();
   }, [persistView]);
 
@@ -1685,29 +2204,192 @@ export function SimpleStickerCanvas() {
     persistView(next);
   };
 
+  const changeZoom = useCallback(
+    (factor: number) => {
+      const current = viewRef.current;
+      const next = {
+        ...current,
+        zoom: clamp(current.zoom * factor, MIN_ZOOM, MAX_ZOOM),
+      };
+      updateView(next);
+      persistView(next);
+    },
+    [persistView, updateView],
+  );
+
+  const resetZoom = useCallback(() => {
+    const next = { ...viewRef.current, zoom: 1 };
+    updateView(next);
+    persistView(next);
+  }, [persistView, updateView]);
+
+  const fitCanvasToContent = useCallback(() => {
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    const elements = stickersRef.current;
+    if (!viewport || !elements.length) {
+      const next = { x: 0, y: 0, zoom: 1 };
+      updateView(next);
+      persistView(next);
+      return;
+    }
+
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    for (const element of elements) {
+      const angle = (element.rotation * Math.PI) / 180;
+      const halfWidth = element.width / 2;
+      const halfHeight = element.height / 2;
+      const boundsWidth =
+        Math.abs(Math.cos(angle)) * halfWidth +
+        Math.abs(Math.sin(angle)) * halfHeight;
+      const boundsHeight =
+        Math.abs(Math.sin(angle)) * halfWidth +
+        Math.abs(Math.cos(angle)) * halfHeight;
+      left = Math.min(left, element.x - boundsWidth);
+      top = Math.min(top, element.y - boundsHeight);
+      right = Math.max(right, element.x + boundsWidth);
+      bottom = Math.max(bottom, element.y + boundsHeight);
+    }
+
+    const isCompactViewport = viewport.width <= 760;
+    const padding = isCompactViewport ? 32 : 96;
+    const selectedElement = elements.find(
+      (element) => element.id === selectedIdRef.current,
+    );
+    const hasPropertiesPanel = Boolean(selectedElement);
+    const isLandscapeCompactViewport =
+      isCompactViewport && viewport.width > viewport.height;
+    const inspectorWidth = hasPropertiesPanel
+      ? isCompactViewport
+          ? isLandscapeCompactViewport
+            ? Math.min(268, viewport.width * 0.4) + padding / 2
+            : 0
+        : 292
+      : 0;
+    const availableWidth = Math.max(
+      isCompactViewport ? 160 : 240,
+      viewport.width - padding * 2 - inspectorWidth,
+    );
+    const availableHeight = Math.max(
+      isCompactViewport ? 160 : 240,
+      viewport.height - padding * 2,
+    );
+    const contentWidth = Math.max(1, right - left);
+    const contentHeight = Math.max(1, bottom - top);
+    const next = {
+      x: (left + right) / 2,
+      y: (top + bottom) / 2,
+      zoom: clamp(
+        Math.min(availableWidth / contentWidth, availableHeight / contentHeight),
+        MIN_ZOOM,
+        MAX_ZOOM,
+      ),
+    };
+    updateView(next);
+    persistView(next);
+  }, [persistView, updateView]);
+
   const worldStyle = {
     transform: `translate3d(calc(50vw - ${view.x * view.zoom}px), calc(50dvh - ${view.y * view.zoom}px), 0) scale(${view.zoom})`,
     "--simple-control-scale": String(1 / view.zoom),
   } as CSSProperties;
 
+  const isDarkBg =
+    background.color.startsWith("#") &&
+    (() => {
+      const hex = background.color.replace("#", "");
+      const num = parseInt(
+        hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex,
+        16,
+      );
+      if (Number.isNaN(num)) return false;
+      const r = (num >> 16) & 255;
+      const g = (num >> 8) & 255;
+      const b = num & 255;
+      return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+    })();
+
   const gridStyle = {
     "--grid-size": `${28 * view.zoom}px`,
     "--grid-x": `${-view.x * view.zoom}px`,
     "--grid-y": `${-view.y * view.zoom}px`,
+    "--grid-opacity": String(background.gridOpacity ?? 0.42),
+    "--grid-color": isDarkBg
+      ? "rgba(255, 255, 255, 0.45)"
+      : "rgba(100, 90, 78, 0.42)",
   } as CSSProperties;
+  const selectedElement = stickers.find(
+    (element) => element.id === selectedId,
+  );
+  const selectedProperties =
+    selectedElement && !editingId && !drawingId ? selectedElement : null;
+  const canvasUiDisabled =
+    isImporting ||
+    isExporting ||
+    isCreatingCanvas;
+  const selectedPropertiesDisabled =
+    canvasUiDisabled ||
+    Boolean(
+      selectedProperties &&
+        selectedProperties.type === "image" &&
+        processingStickerId === selectedProperties.id,
+    );
+  const canUndo = historyPosition.index > 0;
+  const canRedo =
+    historyPosition.index >= 0 &&
+    historyPosition.index < historyPosition.length - 1;
+
   return (
     <main
       ref={viewportRef}
       className="simple-sticker-canvas"
+      style={{ "--paper": background.color } as CSSProperties}
+      data-bg-style={background.style}
       data-active-tool={activeTool}
+      data-external-drag={isExternalDragActive}
+      data-inspector-open={Boolean(selectedProperties)}
+      data-bg-inspector-open={Boolean(backgroundInspectorOpen)}
       onPointerDown={startViewportPointer}
       onPointerMove={moveGlobalPointer}
       onPointerUp={finishGlobalPointer}
       onPointerCancel={finishGlobalPointer}
       onWheel={handleWheel}
+      onDragEnter={handleExternalDragEnter}
+      onDragOver={handleExternalDragOver}
+      onDragLeave={handleExternalDragLeave}
+      onDrop={(event) => void handleExternalDrop(event)}
+      onDragEnd={clearExternalDrag}
     >
-      <div className="simple-canvas-grid" style={gridStyle} />
-      <div className="simple-sticker-world" style={worldStyle}>
+      <CanvasTopBar
+        disabled={canvasUiDisabled}
+        historyOpen={historyOpen}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onToggleHistory={() => setHistoryOpen((current) => !current)}
+        onNewCanvas={() => void createNewCanvas()}
+        onDownloadCanvas={downloadCanvas}
+        onUndo={undo}
+        onRedo={redo}
+      />
+
+      {isExternalDragActive ? (
+        <div className="simple-drop-overlay" role="status" aria-live="polite">
+          <div className="simple-drop-overlay-card">
+            <Icon name="image" />
+            <strong>拖入图片即可添加</strong>
+            <span>松开鼠标，将图片放置在这里</span>
+          </div>
+        </div>
+      ) : null}
+      <div
+        ref={gridRef}
+        className="simple-canvas-grid"
+        data-style={background.style}
+        style={gridStyle}
+      />
+      <div ref={worldRef} className="simple-sticker-world" style={worldStyle}>
         {stickers.map((sticker) =>
           sticker.type === "image" ? (
             <StickerCanvasItem
@@ -1716,12 +2398,10 @@ export function SimpleStickerCanvas() {
               selected={selectedId === sticker.id}
               entering={enteringId === sticker.id}
               isProcessing={processingStickerId === sticker.id}
+              cropMode={cropEditingId === sticker.id}
               onGestureStart={startStickerGesture}
-              onDelete={deleteSticker}
-              onDownload={downloadSticker}
-              onCutout={cutoutSticker}
-              onUpdateStyle={updateStickerStyle}
               onSelect={selectSticker}
+              onToggleCrop={toggleCropMode}
             />
           ) : (
             <CanvasElementItem
@@ -1732,11 +2412,9 @@ export function SimpleStickerCanvas() {
               drawing={drawingId === sticker.id}
               onGestureStart={startStickerGesture}
               onSelect={selectSticker}
-              onDelete={deleteSticker}
               onStartEditing={startElementEditing}
               onCommitText={commitElementText}
               onCancelEditing={cancelElementEditing}
-              onStyleChange={updateCanvasElementProperties}
             />
           ),
         )}
@@ -1750,10 +2428,77 @@ export function SimpleStickerCanvas() {
         />
       ) : null}
 
+      {selectedProperties ? (
+        <CanvasInspector
+          element={selectedProperties}
+          disabled={selectedPropertiesDisabled}
+          processing={
+            selectedProperties.type === "image" &&
+            processingStickerId === selectedProperties.id
+          }
+          onClose={() => {
+            setEditingId(null);
+            setCropEditingId(null);
+            selectSticker(null);
+          }}
+          onStyleChange={(patch, commit) =>
+            selectedProperties.type === "image"
+              ? updateStickerStyle(
+                  selectedProperties.id,
+                  patch,
+                  commit,
+                )
+              : updateCanvasElementProperties(
+                  selectedProperties.id,
+                  patch,
+                  commit,
+                )
+          }
+          onLayerChange={(action) =>
+            changeLayer(selectedProperties.id, action)
+          }
+          onDuplicate={() => void duplicateElement(selectedProperties)}
+          onDelete={() => deleteSticker(selectedProperties)}
+          onDownload={
+            selectedProperties.type === "image"
+              ? () => downloadSticker(selectedProperties)
+              : undefined
+          }
+          cropping={
+            selectedProperties.type === "image" &&
+            cropEditingId === selectedProperties.id
+          }
+          onToggleCrop={
+            selectedProperties.type === "image"
+              ? () => toggleCropMode(selectedProperties.id)
+              : undefined
+          }
+          onToggleCutout={
+            selectedProperties.type === "image"
+              ? () => void cutoutSticker(selectedProperties)
+              : undefined
+          }
+        />
+      ) : backgroundInspectorOpen ? (
+        <CanvasBackgroundInspector
+          config={background}
+          onChange={updateBackground}
+          onClose={() => setBackgroundInspectorOpen(false)}
+        />
+      ) : null}
+
       {!stickers.length ? (
-        <p className="simple-empty-hint">
-          Add an image or text, or drag to draw a shape
-        </p>
+        <div
+          className="simple-empty-state simple-empty-hint"
+          role="note"
+          aria-label="开始创作提示"
+        >
+          <span className="simple-empty-state-kicker">开始创作</span>
+          <strong>添加图片，或直接绘制图形</strong>
+          <span className="simple-empty-state-detail">
+            拖入图片 · 文字工具 · 形状工具
+          </span>
+        </div>
       ) : null}
 
       {isImporting || isExporting || isCreatingCanvas ? (
@@ -1762,10 +2507,10 @@ export function SimpleStickerCanvas() {
           <strong>
             {notice ||
               (isCreatingCanvas
-                ? "Creating new canvas…"
+                ? "正在新建画布…"
                 : isExporting
-                  ? "Exporting canvas…"
-                  : "Creating sticker…")}
+                  ? "正在导出画布…"
+                  : "正在生成贴纸…")}
           </strong>
         </div>
       ) : notice ? (
@@ -1786,17 +2531,17 @@ export function SimpleStickerCanvas() {
             className="simple-canvas-history-backdrop"
             type="button"
             data-canvas-ui
-            aria-label="Close canvas history"
+             aria-label="关闭画布历史"
             onClick={() => setHistoryOpen(false)}
           />
-          <aside className="simple-canvas-history" data-canvas-ui aria-label="Canvas history">
+          <aside className="simple-canvas-history" data-canvas-ui aria-label="画布历史">
             <div className="simple-canvas-history-header">
-              <strong>Canvas history</strong>
+              <strong>画布历史</strong>
               <button
                 type="button"
                 onClick={() => setHistoryOpen(false)}
-                aria-label="Close canvas history"
-                title="Close"
+                aria-label="关闭画布历史"
+                title="关闭"
               >
                 <Icon name="close" />
               </button>
@@ -1826,64 +2571,57 @@ export function SimpleStickerCanvas() {
         </>
       ) : null}
 
-      <div className="simple-canvas-actions" data-canvas-ui aria-label="Canvas actions">
-        <button
-          type="button"
-          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
-          onClick={() => setHistoryOpen((current) => !current)}
-          aria-label="Canvas history"
-          title="Canvas history"
-          data-active={historyOpen}
-        >
-          <Icon name="history" />
-          <span>Canvas history</span>
-        </button>
-        <button
-          type="button"
-          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
-          onClick={() => void createNewCanvas()}
-          aria-label="New canvas"
-          title="New canvas"
-        >
-          <Icon name="plus" />
-          <span>New canvas</span>
-        </button>
-        <button
-          type="button"
-          disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
-          onClick={downloadCanvas}
-          aria-label="Download canvas"
-          title="Download canvas"
-        >
-          <Icon name="download" />
-          <span>Download canvas</span>
-        </button>
-      </div>
-
       <CanvasBottomToolbar
         activeTool={activeTool}
-        disabled={isImporting || isExporting || isCreatingCanvas || Boolean(processingStickerId)}
+        disabled={canvasUiDisabled}
         shapeMenuOpen={shapeMenuOpen}
+        backgroundMenuOpen={backgroundMenuOpen}
+        placement="top"
         onUpload={() => {
           setActiveTool("select");
           setShapeMenuOpen(false);
+          setBackgroundMenuOpen(false);
           uploadInputRef.current?.click();
         }}
         onCamera={() => {
           setActiveTool("select");
           setShapeMenuOpen(false);
+          setBackgroundMenuOpen(false);
           setCameraOpen(true);
         }}
         onSelectTool={(tool) => {
           setActiveTool(tool);
           setShapeMenuOpen(false);
+          setBackgroundMenuOpen(false);
           setEditingId(null);
           selectSticker(null);
         }}
         onToggleShapeMenu={() => {
           setShapeMenuOpen((current) => !current);
+          setBackgroundMenuOpen(false);
           setEditingId(null);
         }}
+        onToggleBackgroundMenu={() => {
+          setBackgroundMenuOpen((current) => !current);
+          setShapeMenuOpen(false);
+        }}
+      >
+        {backgroundMenuOpen ? (
+          <CanvasBackgroundMenu
+            config={background}
+            onChange={updateBackground}
+            onClose={() => setBackgroundMenuOpen(false)}
+          />
+        ) : null}
+      </CanvasBottomToolbar>
+
+      <CanvasZoomControls
+        zoom={view.zoom}
+        disabled={canvasUiDisabled}
+        onZoomOut={() => changeZoom(0.8)}
+        onResetZoom={resetZoom}
+        onZoomIn={() => changeZoom(1.25)}
+        onFitToContent={fitCanvasToContent}
       />
 
       <input

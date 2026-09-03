@@ -1,7 +1,16 @@
 import type {
+  CanvasBackgroundConfig,
   CanvasElement,
   CanvasElementRecord,
   StickerRecord,
+} from "./canvas-types";
+import {
+  DEFAULT_CANVAS_BACKGROUND,
+  DEFAULT_STICKER_CORNER_RADIUS,
+  DEFAULT_STICKER_SHADOW_BLUR,
+  MAX_STICKER_CORNER_RADIUS,
+  MAX_STICKER_SHADOW_BLUR,
+  normalizeCanvasImageCrop,
 } from "./canvas-types";
 import { toCanvasElementRecord } from "./canvas-history";
 
@@ -26,11 +35,18 @@ function normalizeRecord(
     | Record<string, unknown>,
 ): CanvasElementRecord {
   const raw = value as Record<string, unknown>;
-  if (!raw.type) return { ...value, type: "image" } as StickerRecord;
+  const opacity =
+    typeof raw.opacity === "number" && Number.isFinite(raw.opacity)
+      ? Math.min(1, Math.max(0, raw.opacity))
+      : 1;
+  if (!raw.type) {
+    return normalizeRecord({ ...value, type: "image" });
+  }
   if (raw.type === "note") {
     return {
       ...raw,
       type: "text",
+      opacity,
       color: typeof raw.textColor === "string" ? raw.textColor : "#29251f",
       fontWeight: 400,
       textAlign: "left",
@@ -49,6 +65,7 @@ function normalizeRecord(
   if (raw.type === "text") {
     return {
       ...raw,
+      opacity,
       textOutlineColor:
         typeof raw.textOutlineColor === "string"
           ? raw.textOutlineColor
@@ -72,10 +89,33 @@ function normalizeRecord(
   if (raw.type === "shape") {
     return {
       ...raw,
+      opacity,
       fillEnabled:
         typeof raw.fillEnabled === "boolean"
           ? raw.fillEnabled
           : raw.fillColor !== "transparent",
+      } as CanvasElementRecord;
+  }
+  if (raw.type === "image") {
+    return {
+      ...raw,
+      opacity,
+      cornerRadius:
+        typeof raw.cornerRadius === "number" &&
+        Number.isFinite(raw.cornerRadius)
+          ? Math.min(MAX_STICKER_CORNER_RADIUS, Math.max(0, raw.cornerRadius))
+          : DEFAULT_STICKER_CORNER_RADIUS,
+      cornerRadiusEnabled:
+        typeof raw.cornerRadiusEnabled === "boolean"
+          ? raw.cornerRadiusEnabled
+          : true,
+      shadowEnabled:
+        typeof raw.shadowEnabled === "boolean" ? raw.shadowEnabled : true,
+      shadowBlur:
+        typeof raw.shadowBlur === "number" && Number.isFinite(raw.shadowBlur)
+          ? Math.min(MAX_STICKER_SHADOW_BLUR, Math.max(0, raw.shadowBlur))
+          : DEFAULT_STICKER_SHADOW_BLUR,
+      crop: normalizeCanvasImageCrop(raw.crop),
     } as CanvasElementRecord;
   }
   return value as CanvasElementRecord;
@@ -120,6 +160,36 @@ function openDatabase(): Promise<IDBDatabase> {
   });
 }
 
+let cachedDatabase: IDBDatabase | null = null;
+let openDbPromise: Promise<IDBDatabase> | null = null;
+
+function getDatabase(): Promise<IDBDatabase> {
+  if (cachedDatabase) {
+    return Promise.resolve(cachedDatabase);
+  }
+  if (openDbPromise) {
+    return openDbPromise;
+  }
+  openDbPromise = openDatabase()
+    .then((database) => {
+      cachedDatabase = database;
+      openDbPromise = null;
+      database.onclose = () => {
+        if (cachedDatabase === database) cachedDatabase = null;
+      };
+      database.onversionchange = () => {
+        database.close();
+        if (cachedDatabase === database) cachedDatabase = null;
+      };
+      return database;
+    })
+    .catch((error) => {
+      openDbPromise = null;
+      throw error;
+    });
+  return openDbPromise;
+}
+
 function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
@@ -133,90 +203,70 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 export async function readCanvasElementRecords(): Promise<
   CanvasElementRecord[]
 > {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(ELEMENT_STORE, "readonly");
-    const done = transactionDone(transaction);
-    const request = transaction.objectStore(ELEMENT_STORE).getAll();
-    const records = await new Promise<CanvasElementRecord[]>(
-      (resolve, reject) => {
-        request.onsuccess = () =>
-          resolve(
-            (request.result as CanvasElementRecord[]).map(normalizeRecord),
-          );
-        request.onerror = () =>
-          reject(request.error ?? new Error("Restore failed"));
-      },
-    );
-    await done;
-    return records;
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(ELEMENT_STORE, "readonly");
+  const done = transactionDone(transaction);
+  const request = transaction.objectStore(ELEMENT_STORE).getAll();
+  const records = await new Promise<CanvasElementRecord[]>(
+    (resolve, reject) => {
+      request.onsuccess = () =>
+        resolve(
+          (request.result as CanvasElementRecord[]).map(normalizeRecord),
+        );
+      request.onerror = () =>
+        reject(request.error ?? new Error("Restore failed"));
+    },
+  );
+  await done;
+  return records;
 }
 
 export async function saveCanvasElementRecord(
   element: CanvasElementRecord | CanvasElement,
 ): Promise<void> {
   const record = toCanvasElementRecord(element);
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(ELEMENT_STORE, "readwrite");
-    transaction.objectStore(ELEMENT_STORE).put(record);
-    await transactionDone(transaction);
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(ELEMENT_STORE, "readwrite");
+  transaction.objectStore(ELEMENT_STORE).put(record);
+  await transactionDone(transaction);
 }
 
 export async function replaceCanvasElementRecords(
   elements: readonly (CanvasElementRecord | CanvasElement)[],
 ): Promise<void> {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(ELEMENT_STORE, "readwrite");
-    const store = transaction.objectStore(ELEMENT_STORE);
-    store.clear();
-    elements.forEach((element) => store.put(toCanvasElementRecord(element)));
-    await transactionDone(transaction);
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(ELEMENT_STORE, "readwrite");
+  const store = transaction.objectStore(ELEMENT_STORE);
+  store.clear();
+  elements.forEach((element) => store.put(toCanvasElementRecord(element)));
+  await transactionDone(transaction);
 }
 
 export async function removeCanvasElementRecord(id: string): Promise<void> {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(ELEMENT_STORE, "readwrite");
-    transaction.objectStore(ELEMENT_STORE).delete(id);
-    await transactionDone(transaction);
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(ELEMENT_STORE, "readwrite");
+  transaction.objectStore(ELEMENT_STORE).delete(id);
+  await transactionDone(transaction);
 }
 
 export async function readCanvasProjects(): Promise<CanvasProject[]> {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(CANVAS_PROJECT_STORE, "readonly");
-    const done = transactionDone(transaction);
-    const request = transaction.objectStore(CANVAS_PROJECT_STORE).getAll();
-    const projects = await new Promise<CanvasProject[]>((resolve, reject) => {
-      request.onsuccess = () =>
-        resolve(
-          (request.result as CanvasProject[]).map((project) => ({
-            ...project,
-            elements: project.elements.map(normalizeRecord),
-          })),
-        );
-      request.onerror = () =>
-        reject(request.error ?? new Error("Canvas history unavailable"));
-    });
-    await done;
-    return projects;
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(CANVAS_PROJECT_STORE, "readonly");
+  const done = transactionDone(transaction);
+  const request = transaction.objectStore(CANVAS_PROJECT_STORE).getAll();
+  const projects = await new Promise<CanvasProject[]>((resolve, reject) => {
+    request.onsuccess = () =>
+      resolve(
+        (request.result as CanvasProject[]).map((project) => ({
+          ...project,
+          elements: project.elements.map(normalizeRecord),
+        })),
+      );
+    request.onerror = () =>
+      reject(request.error ?? new Error("Canvas history unavailable"));
+  });
+  await done;
+  return projects;
 }
 
 export async function saveCanvasProject(
@@ -224,17 +274,13 @@ export async function saveCanvasProject(
     elements: readonly (CanvasElementRecord | CanvasElement)[];
   },
 ): Promise<void> {
-  const database = await openDatabase();
-  try {
-    const transaction = database.transaction(CANVAS_PROJECT_STORE, "readwrite");
-    transaction.objectStore(CANVAS_PROJECT_STORE).put({
-      ...project,
-      elements: project.elements.map(toCanvasElementRecord),
-    } satisfies CanvasProject);
-    await transactionDone(transaction);
-  } finally {
-    database.close();
-  }
+  const database = await getDatabase();
+  const transaction = database.transaction(CANVAS_PROJECT_STORE, "readwrite");
+  transaction.objectStore(CANVAS_PROJECT_STORE).put({
+    ...project,
+    elements: project.elements.map(toCanvasElementRecord),
+  } satisfies CanvasProject);
+  await transactionDone(transaction);
 }
 
 // Compatibility aliases for modules that still use sticker-oriented names.
@@ -242,3 +288,37 @@ export const readStickerRecords = readCanvasElementRecords;
 export const saveStickerRecord = saveCanvasElementRecord;
 export const replaceStickerRecords = replaceCanvasElementRecords;
 export const removeStickerRecord = removeCanvasElementRecord;
+
+const CANVAS_BACKGROUND_KEY = "simple-canvas-background-config";
+
+export function readCanvasBackground(): CanvasBackgroundConfig {
+  if (typeof window === "undefined") return DEFAULT_CANVAS_BACKGROUND;
+  try {
+    const raw = window.localStorage.getItem(CANVAS_BACKGROUND_KEY);
+    if (!raw) return DEFAULT_CANVAS_BACKGROUND;
+    const parsed = JSON.parse(raw) as Partial<CanvasBackgroundConfig>;
+    if (!parsed || typeof parsed !== "object") return DEFAULT_CANVAS_BACKGROUND;
+    return {
+      style: parsed.style ?? DEFAULT_CANVAS_BACKGROUND.style,
+      color:
+        typeof parsed.color === "string"
+          ? parsed.color
+          : DEFAULT_CANVAS_BACKGROUND.color,
+      gridOpacity:
+        typeof parsed.gridOpacity === "number"
+          ? parsed.gridOpacity
+          : DEFAULT_CANVAS_BACKGROUND.gridOpacity,
+    };
+  } catch {
+    return DEFAULT_CANVAS_BACKGROUND;
+  }
+}
+
+export function saveCanvasBackground(config: CanvasBackgroundConfig): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CANVAS_BACKGROUND_KEY, JSON.stringify(config));
+  } catch {
+    // Ignore storage quota or disabled storage
+  }
+}

@@ -21,9 +21,10 @@ async function loadHistoryModule() {
 }
 
 async function loadCanvasExportModule() {
-  const [source, oilFilmSource] = await Promise.all([
+  const [source, oilFilmSource, typesSource] = await Promise.all([
     readSource("../lib/canvas-export.ts"),
     readSource("../lib/oil-film-render.ts"),
+    readSource("../lib/canvas-types.ts"),
   ]);
   const compilerOptions = {
     module: ts.ModuleKind.ESNext,
@@ -33,8 +34,14 @@ async function loadCanvasExportModule() {
     compilerOptions,
   }).outputText;
   const oilFilmUrl = `data:text/javascript;base64,${Buffer.from(oilFilmOutput).toString("base64")}`;
+  const typesOutput = ts.transpileModule(typesSource, {
+    compilerOptions,
+  }).outputText;
+  const typesUrl = `data:text/javascript;base64,${Buffer.from(typesOutput).toString("base64")}`;
   const output = ts.transpileModule(
-    source.replace('from "./oil-film-render"', `from "${oilFilmUrl}"`),
+    source
+      .replace('from "./oil-film-render"', `from "${oilFilmUrl}"`)
+      .replace(/from "\.\/canvas-types"/g, `from "${typesUrl}"`),
     {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -68,6 +75,17 @@ test("canvas element types support text styling and five shape kinds without not
     assert.match(source, new RegExp(`"${shape}"`));
   }
   assert.match(source, /fillEnabled: boolean/);
+  assert.match(source, /export type CanvasImageCrop/);
+  assert.match(source, /crop\?: CanvasImageCrop/);
+  for (const property of [
+    "cornerRadius",
+    "cornerRadiusEnabled",
+    "shadowEnabled",
+    "shadowBlur",
+    "opacity",
+  ]) {
+    assert.match(source, new RegExp(`${property}\\?: (string|number|boolean)`));
+  }
 });
 
 test("storage version 4 keeps legacy migration and adds canvas history storage", async () => {
@@ -82,6 +100,12 @@ test("storage version 4 keeps legacy migration and adds canvas history storage",
   assert.match(source, /raw\.textOutlineColor/);
   assert.match(source, /raw\.textOutlineWidth/);
   assert.match(source, /raw\.holoEnabled/);
+  assert.match(source, /raw\.cornerRadius/);
+  assert.match(source, /raw\.cornerRadiusEnabled/);
+  assert.match(source, /raw\.shadowEnabled/);
+  assert.match(source, /raw\.shadowBlur/);
+  assert.match(source, /normalizeCanvasImageCrop\(raw\.crop\)/);
+  assert.match(source, /raw\.opacity/);
   assert.match(source, /elementCursorRequest\.onsuccess/);
   assert.match(source, /cursor\.update\(normalizeRecord\(cursor\.value\)\)/);
   assert.match(source, /legacyStore\.openCursor\(\)/);
@@ -108,22 +132,22 @@ test("canvas creates text on click, commits blurred editing, and draws shapes wi
   assert.match(source, /holoEnabled: false/);
   assert.match(source, /data-active-tool=\{activeTool\}/);
   assert.match(source, /<CanvasBottomToolbar[\s\S]*?activeTool=\{activeTool\}/);
+  assert.match(source, /<CanvasBottomToolbar[\s\S]*?placement="top"/);
   assert.match(source, /<CanvasElementItem[\s\S]*?element=\{sticker\}/);
-  assert.match(source, /editingId[\s\S]*?closest\("textarea\[aria-label='Edit text'\]"\)/);
+  assert.match(source, /editingId[\s\S]*?closest\("textarea\[aria-label='编辑文字'\]"\)/);
   assert.match(source, /document\.activeElement[\s\S]*?activeElement\.blur\(\)/);
 });
 
-test("element item commits blurred text, owns the contextual toolbar, and renders normalized SVG shapes", async () => {
+test("element item commits blurred text and renders normalized SVG shapes", async () => {
   const source = await readSource("../app/CanvasElementItem.tsx");
 
   assert.match(source, /<textarea/);
   assert.match(source, /event\.key === "Enter" && \(event\.ctrlKey \|\| event\.metaKey\)/);
   assert.match(source, /event\.key === "Escape"/);
   assert.match(source, /onBlur=\{\(event\) => commitText\(event\.currentTarget\.value\)\}/);
-  assert.match(source, /const \[toolbarPlacement, setToolbarPlacement\] = useState<"left" \| "right">/);
-  assert.match(source, /window\.innerWidth - rect\.right < 260 \? "left" : "right"/);
   assert.match(source, /selected && !editing && !drawing \? \(/);
-  assert.match(source, /<CanvasPropertiesToolbar[\s\S]*?placement=\{toolbarPlacement\}/);
+  assert.doesNotMatch(source, /CanvasPropertiesToolbar/);
+  assert.match(source, /opacity: element\.opacity \?\? 1/);
   assert.match(source, /<svg/);
   assert.match(source, /viewBox="0 0 100 100"/);
   assert.match(source, /element\.shape === "rectangle"/);
@@ -150,54 +174,61 @@ test("bottom toolbar exposes icon-only primary entries and five icon-only shape 
   const source = await readSource("../app/CanvasBottomToolbar.tsx");
   const styles = await readSource("../app/globals.css");
 
-  for (const label of ["Upload", "Camera", "Text", "Shape"]) {
+  for (const label of ["上传图片", "相机", "文字", "形状"]) {
     assert.match(source, new RegExp(`aria-label="${label}"`));
   }
   assert.doesNotMatch(source, /aria-label="Note"/);
   assert.match(source, /shapeMenuOpen \? \(/);
   for (const shape of ["rectangle", "ellipse", "triangle", "diamond", "line"]) {
-    assert.match(source, new RegExp(`onSelectTool\\("${shape}"\\)`));
+    assert.match(source, new RegExp(`selectShape\\("${shape}"\\)`));
   }
   assert.match(source, /id="canvas-shape-menu"/);
-  assert.match(source, /<Icon name="image" \/>[\s\S]*?<span>Upload<\/span>/);
-  assert.match(source, /<Icon name="shapes" \/>[\s\S]*?<span>Shape<\/span>/);
+  assert.match(source, /id="canvas-shape-menu"[\s\S]*?role="menu"/);
+  assert.match(source, /<Icon name="image" \/>[\s\S]*?<span>上传图片<\/span>/);
+  assert.match(source, /<Icon name="shapes" \/>[\s\S]*?<span>形状<\/span>/);
+  assert.match(source, /aria-haspopup="dialog"/);
+  assert.match(source, /aria-controls="canvas-background-menu"/);
+  assert.match(source, /className="simple-toolbar-divider" aria-hidden="true"/);
   assert.doesNotMatch(source, /Download canvas/);
-  assert.match(styles, /\.simple-floating-actions button > span,\s*\.simple-shape-menu button > span[\s\S]*?clip: rect\(0, 0, 0, 0\)/);
+  assert.match(styles, /\.simple-floating-actions > button > span,\s*\.simple-shape-menu button > span[\s\S]*?clip: rect\(0, 0, 0, 0\)/);
+  assert.match(styles, /\.canvas-background-menu\s*\{[\s\S]*?background:var\(--paper-raised, #fdfaf4\)/);
+  assert.match(styles, /\.canvas-bg-colors-row > \.canvas-style-color\s*\{[\s\S]*?conic-gradient/);
 });
 
-test("properties toolbar exposes styling actions directly in the vertical toolbar", async () => {
-  const source = await readSource("../app/CanvasPropertiesToolbar.tsx");
+test("selected elements share an Excalidraw-style icon palette", async () => {
+  const source = await readSource("../app/CanvasInspector.tsx");
   const styles = await readSource("../app/globals.css");
 
-  assert.match(source, /placement = "right"/);
-  assert.match(source, /data-placement=\{placement\}/);
-  assert.doesNotMatch(source, /styleOpen|aria-label="Style"/);
-  assert.match(source, /const \[activeFlyout, setActiveFlyout\] = useState<Flyout>\(null\)/);
-  for (const label of ["Font size", "Bold", "Text alignment", "Delete"]) {
-    assert.match(source, new RegExp(`aria-label="${label}"`));
+  assert.match(source, /className="canvas-properties-panel"/);
+  assert.match(source, /const \[activeFlyout, setActiveFlyout\] = useState<PanelFlyout>\(null\)/);
+  for (const label of ["字号", "粗体", "复制", "删除"]) {
+    assert.match(source, new RegExp(`aria-label="${label}"|label="${label}"`));
   }
+  assert.match(source, /label=\{`文字对齐：/);
   assert.match(source, /activeFlyout === "font-size"/);
   assert.match(source, /activeFlyout === "border-width"/);
-  assert.match(source, /className="sticker-vtoolbar-flyout canvas-property-flyout"/);
   for (const label of [
-    "Text color",
-    "Text outline color",
-    "Text outline width",
-    "Border color",
-    "Border width",
+    "文字颜色",
+    "文字描边颜色",
+    "文字描边粗细",
+    "边框颜色",
+    "边框粗细",
   ]) {
     assert.match(source, new RegExp(`aria-label="${label}"|title="${label}"|label="${label}"`));
   }
-  assert.match(source, /Turn on Holo/);
-  assert.match(source, /label=\{isText \? "Background color" : "Fill color"\}/);
+  assert.match(source, /开启全息/);
+  assert.match(source, /背景颜色/);
+  assert.match(source, /填充颜色/);
   assert.match(source, /backgroundColor/);
   assert.match(source, /borderColor/);
   assert.match(source, /borderWidth/);
   assert.match(source, /textOutlineColor/);
   assert.match(source, /textOutlineWidth/);
-  assert.match(source, /sticker-vtoolbar-label/);
+  assert.match(source, /canvas-properties-section/);
+  assert.match(source, /<details className="canvas-properties-advanced">[\s\S]*?<summary>更多操作<\/summary>/);
   assert.match(source, /max=\{48\}/);
-  assert.match(styles, /\.sticker-labeled-toolbar[\s\S]*?\.sticker-vtoolbar-label/);
+  assert.match(styles, /\.canvas-properties-panel[\s\S]*?width: min\(272px/);
+  assert.match(styles, /\.canvas-properties-icon-button[\s\S]*?width: 40px/);
   assert.match(source, /fillEnabled/);
   assert.match(source, /fillColor/);
   assert.match(source, /strokeColor/);
@@ -308,12 +339,12 @@ test("canvas PNG export keeps the paper dot grid, rotated content margin, and z-
 });
 
 test("text sticker outlines are included in preview fields and PNG export", async () => {
-  const [types, storage, item, toolbar, styles, exportSource, canvasExport] =
+  const [types, storage, item, inspector, styles, exportSource, canvasExport] =
     await Promise.all([
       readSource("../lib/canvas-types.ts"),
       readSource("../lib/sticker-storage.ts"),
       readSource("../app/CanvasElementItem.tsx"),
-      readSource("../app/CanvasPropertiesToolbar.tsx"),
+      readSource("../app/CanvasInspector.tsx"),
       readSource("../app/globals.css"),
       readSource("../lib/canvas-export.ts"),
       loadCanvasExportModule(),
@@ -330,8 +361,9 @@ test("text sticker outlines are included in preview fields and PNG export", asyn
   assert.match(item, /textOutlineEdgeBlur/);
   assert.match(item, /overflow: "visible"/);
   assert.match(item, /textShadow:/);
-  assert.match(toolbar, /aria-label="Text outline width"/);
-  assert.match(toolbar, /Turn on Holo/);
+  assert.match(item, /opacity: element\.opacity \?\? 1/);
+  assert.match(inspector, /aria-label="文字描边粗细"|label="文字描边粗细"/);
+  assert.match(inspector, /开启全息/);
   assert.match(styles, /\.canvas-text-outline\s*\{\s*filter: none/);
   assert.match(styles, /text-rendering: geometricPrecision/);
   assert.match(styles, /-webkit-font-smoothing: antialiased/);
@@ -342,6 +374,7 @@ test("text sticker outlines are included in preview fields and PNG export", asyn
   assert.match(exportSource, /context\.lineJoin = "round"/);
   assert.match(exportSource, /context\.lineCap = "round"/);
   assert.match(exportSource, /context\.shadowBlur = Math\.max/);
+  assert.match(exportSource, /context\.globalAlpha = Math\.min/);
 
   const calls = [];
   const context = {
@@ -429,27 +462,126 @@ test("text sticker outlines are included in preview fields and PNG export", asyn
 test("canvas actions keep download independent from the editing toolbar", async () => {
   const canvas = await readSource("../app/SimpleStickerCanvas.tsx");
   const toolbar = await readSource("../app/CanvasBottomToolbar.tsx");
+  const topbar = await readSource("../app/CanvasTopBar.tsx");
+  const inspector = await readSource("../app/CanvasInspector.tsx");
+  const zoom = await readSource("../app/CanvasZoomControls.tsx");
   const styles = await readSource("../app/globals.css");
 
   assert.match(canvas, /import \{ exportCanvasToPng \} from "@\/lib\/canvas-export"/);
   assert.match(canvas, /const \[isExporting, setIsExporting\] = useState\(false\)/);
   assert.match(canvas, /const exportCanvas = useCallback\(async \(\) => \{[\s\S]*?setIsExporting\(true\)[\s\S]*?await exportCanvasToPng\(stickersRef\.current\)[\s\S]*?finally \{[\s\S]*?setIsExporting\(false\)/);
   assert.match(canvas, /const downloadCanvas = useCallback\(\(\) => \{[\s\S]*?activeElement\.blur\(\)[\s\S]*?exportCanvas\(\)/);
-  assert.match(canvas, /disabled=\{isImporting \|\| isExporting \|\| isCreatingCanvas \|\| Boolean\(processingStickerId\)\}/);
-  assert.match(canvas, /isCreatingCanvas[\s\S]*?"Creating new canvas…"/);
-  assert.match(canvas, /className="simple-canvas-actions"/);
-  assert.match(canvas, /onClick=\{\(\) => void createNewCanvas\(\)\}[\s\S]*?aria-label="New canvas"/);
-  assert.match(canvas, /onClick=\{downloadCanvas\}[\s\S]*?aria-label="Download canvas"/);
+  assert.match(canvas, /const canvasUiDisabled =/);
+  assert.match(canvas, /<CanvasTopBar[\s\S]*?disabled=\{canvasUiDisabled\}/);
+  assert.match(canvas, /<CanvasInspector[\s\S]*?element=\{selectedProperties\}/);
+  assert.match(canvas, /<CanvasZoomControls[\s\S]*?onFitToContent=\{fitCanvasToContent\}/);
+  assert.match(canvas, /isCreatingCanvas[\s\S]*?"正在新建画布…"/);
   assert.match(canvas, /saveCanvasProject\(nextProject\)/);
   assert.match(canvas, /openCanvasProject/);
-  assert.match(canvas, /aria-label="Canvas history"/);
+  assert.match(canvas, /aria-label="画布历史"/);
+  assert.match(canvas, /className="simple-empty-state simple-empty-hint"/);
+  assert.match(canvas, /开始创作/);
   assert.match(canvas, /simple-canvas-history-backdrop[\s\S]*?setHistoryOpen\(false\)/);
-  assert.match(canvas, /<Icon name="history" \/>[\s\S]*?<Icon name="plus" \/>/);
   assert.match(canvas, /replaceStickerRecords\(defaults\)/);
   assert.doesNotMatch(toolbar, /onDownloadCanvas|Download canvas/);
-  assert.match(styles, /\.simple-canvas-actions[\s\S]*?left: max\(22px/);
-  assert.match(styles, /\.simple-canvas-history[\s\S]*?bottom: max\(80px/);
+  assert.match(topbar, /aria-label="撤销"/);
+  assert.match(topbar, /aria-label="重做"/);
+  assert.match(topbar, /<Icon name="menu" \/>/);
+  assert.doesNotMatch(topbar, /simple-canvas-title-block|simple-canvas-topbar-status/);
+  assert.match(inspector, /onStyleChange/);
+  assert.match(inspector, /onToggleCutout/);
+  assert.match(inspector, /icon="scissors"/);
+  assert.match(inspector, /icon="eraser"/);
+  assert.equal((inspector.match(/icon="eraser"/g) ?? []).length, 1);
+  assert.match(inspector, /onToggleCrop/);
+  assert.doesNotMatch(inspector, /Image size|image-size|onTransformChange/);
+  assert.match(inspector, /className="canvas-properties-panel"/);
+  assert.match(inspector, /data-element-type=\{element\.type\}/);
+  for (const heading of ["边角", "透明度", "图层", "操作"]) {
+    assert.match(inspector, new RegExp(`>${heading}<`));
+  }
+  assert.match(inspector, /canvas-properties-icon-button/);
+  assert.match(inspector, /aria-label="透明度"/);
+  assert.match(inspector, /"--range-progress"/);
+  assert.match(inspector, /icon="corners-square"/);
+  assert.match(inspector, /cornerRadiusEnabled/);
+  assert.match(inspector, /shadowEnabled/);
+  assert.match(inspector, /cornerRadius/);
+  assert.match(inspector, /shadowBlur/);
+  assert.doesNotMatch(inspector, /aspectLocked|Image rotation|canvas-inspector-lock|canvas-inspector-rotation/);
+  assert.doesNotMatch(inspector, /className="[^"]*canvas-inspector[^"]*"/);
+  assert.doesNotMatch(inspector, /canvas-image-properties-toolbar|canvas-element-properties-toolbar/);
+  assert.match(zoom, /aria-label="缩小"/);
+  assert.match(zoom, /aria-label="放大"/);
+  assert.match(styles, /\.simple-canvas-topbar/);
+  assert.match(styles, /\.simple-canvas-menu\s*\{[\s\S]*?position: absolute/);
+  assert.match(styles, /\.simple-canvas-menu\s*\{[\s\S]*?grid-template-columns: repeat\(3, 42px\)/);
+  assert.match(styles, /\.simple-canvas-menu\s*\{[\s\S]*?top: calc\(100% \+ 10px\)/);
+  assert.match(styles, /\.simple-canvas-menu button\s*\{[\s\S]*?border: 0/);
+  assert.match(styles, /\.simple-left-toolbar/);
+  assert.match(styles, /\.simple-canvas-zoom-controls/);
+  assert.match(styles, /--sticker-radius: 16px/);
+  assert.match(styles, /\.simple-sticker-visual[\s\S]*?border-radius: var\(--sticker-radius\)/);
+  assert.match(styles, /\.simple-sticker-visual\s*\{[\s\S]*?overflow: visible/);
+  assert.match(styles, /\.simple-sticker\[data-cropped="true"\][\s\S]*?overflow: hidden/);
+  assert.match(styles, /\.canvas-properties-panel\s*\{[\s\S]*?width: min\(272px/);
+  assert.match(styles, /\.canvas-properties-icon-button[\s\S]*?border-radius: 9px/);
+  assert.match(styles, /\.canvas-properties-icon-button\[data-active="true"\][\s\S]*?background: var\(--accent\)/);
+  assert.match(styles, /\.canvas-style-color\s*\{[\s\S]*?display: grid/);
+  assert.match(styles, /\.canvas-style-color input\[type="color"\][\s\S]*?opacity: 0/);
+  assert.match(styles, /\.canvas-style-color-dot\s*\{[\s\S]*?border-radius: 50%/);
+  assert.match(styles, /var\(--range-progress, 0%\)/);
+  assert.match(styles, /::-moz-range-progress/);
+  assert.match(styles, /\.simple-sticker-crop-handle/);
+  assert.match(styles, /\.simple-floating-actions > button\s*\{[\s\S]*?border-radius: 9px/);
+  assert.match(styles, /\.simple-shape-menu button\s*\{[\s\S]*?border-radius: 9px/);
+  assert.match(styles, /\.simple-left-toolbar \.simple-shape-menu\s*\{[\s\S]*?grid-template-columns: repeat\(5, 42px\)/);
+  assert.match(styles, /\.simple-left-toolbar \.simple-shape-menu\s*\{[\s\S]*?top:calc\(100% \+ 40px\)[\s\S]*?bottom:auto/);
+  assert.match(styles, /\.simple-canvas-history[\s\S]*?top: max\(66px/);
+  assert.match(styles, /\/\* Keep the popover above its full-screen dismiss target \(z-index: 34\)\. \*\/[\s\S]*?z-index: 35/);
   assert.match(styles, /\.simple-canvas-history-backdrop[\s\S]*?inset: 0/);
-  assert.match(styles, /\.simple-canvas-actions button \{[\s\S]*?width: 46px;[\s\S]*?height: 46px;/);
-  assert.match(styles, /\.simple-canvas-actions button > span[\s\S]*?clip: rect\(0, 0, 0, 0\)/);
+  assert.match(styles, /\.simple-canvas-toolbar\[data-placement="top"\]/);
+  assert.match(styles, /\.simple-toolbar-divider\s*\{[\s\S]*?background: var\(--ui-border\)/);
+  assert.match(styles, /\.canvas-properties-advanced\s*>\s*summary[\s\S]*?list-style: none/);
+  assert.match(styles, /\.canvas-properties-advanced\s*>\s*summary::after[\s\S]*?border-right: 1\.5px solid currentColor/);
+  assert.doesNotMatch(styles, /\.canvas-properties-advanced\s*>\s*summary::after[\s\S]*?content: "⌄"/);
+  assert.match(styles, /@keyframes canvas-properties-advanced-enter/);
+  assert.match(styles, /\.simple-empty-state\s*\{[\s\S]*?pointer-events: none/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.simple-canvas-toolbar\[data-placement="top"\][\s\S]*?bottom: max\(12px/);
+  assert.match(styles, /\.simple-floating-actions,[\s\S]*?background: var\(--ui-surface\)/);
+  assert.match(styles, /\.simple-canvas-menu,[\s\S]*?backdrop-filter: none/);
+});
+
+test("canvas chrome adapts to compact, short, and landscape viewports", async () => {
+  const canvas = await readSource("../app/SimpleStickerCanvas.tsx");
+  const styles = await readSource("../app/globals.css");
+
+  assert.match(canvas, /const isCompactViewport = viewport\.width <= 760/);
+  assert.match(canvas, /const isLandscapeCompactViewport =/);
+  assert.match(canvas, /hasPropertiesPanel/);
+  assert.match(styles, /html,[\s\S]*?body[\s\S]*?height: 100%/);
+  assert.match(styles, /#root[\s\S]*?height: 100%/);
+  assert.match(styles, /@media \(max-width: 760px\)/);
+  assert.match(styles, /@media \(max-width: 420px\)/);
+  assert.match(styles, /@media \(min-width: 761px\) and \(max-height: 620px\)/);
+  assert.match(styles, /@media \(max-width: 760px\) and \(orientation: landscape\)/);
+  assert.match(canvas, /data-inspector-open=\{Boolean\(selectedProperties\)\}/);
+  assert.match(styles, /data-inspector-open="true"/);
+  assert.match(styles, /\.canvas-properties-panel/);
+  assert.match(styles, /font-size: 16px/);
+  assert.match(styles, /overscroll-behavior: contain/);
+  assert.match(styles, /\.sticker-vertical-toolbar\[data-placement="top"\]/);
+  assert.match(styles, /\.sticker-vertical-toolbar\[data-placement="bottom"\]/);
+  assert.match(styles, /sticker-toolbar-horizontal-enter/);
+});
+
+test("canvas chrome uses a converged surface and active-state system", async () => {
+  const styles = await readSource("../app/globals.css");
+
+  assert.match(styles, /--ui-surface-subtle:/);
+  assert.match(styles, /--ui-shadow-float:/);
+  assert.match(styles, /\.simple-canvas-toolbar\s*>\s*button\[data-active="true"\][\s\S]*?background: var\(--ui-accent-soft\)/);
+  assert.match(styles, /\.canvas-properties-icon-button\s*\{[\s\S]*?border: 1px solid var\(--ui-border\)/);
+  assert.match(styles, /\.canvas-bg-style-item\s*\{[\s\S]*?background: var\(--ui-surface-subtle\)/);
+  assert.match(styles, /\.sticker-vtoolbar-flyout\s*\{[\s\S]*?border-radius: var\(--radius-popover\)/);
 });

@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useRef,
-  useState,
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
@@ -16,7 +15,6 @@ import type {
   CanvasTextElement,
 } from "@/lib/canvas-types";
 import { Icon } from "./Icon";
-import { CanvasPropertiesToolbar } from "./CanvasPropertiesToolbar";
 
 type CanvasNonImageElement =
   | CanvasTextElement
@@ -33,15 +31,9 @@ interface CanvasElementItemProps {
     kind: CanvasElementGestureKind,
   ) => void;
   onSelect: (id: string) => void;
-  onDelete: (element: CanvasNonImageElement) => void;
   onStartEditing: (id: string) => void;
   onCommitText: (id: string, text: string) => void;
   onCancelEditing: (id: string) => void;
-  onStyleChange: (
-    id: string,
-    patch: Partial<CanvasNonImageElement>,
-    commit?: boolean,
-  ) => void;
 }
 
 function CanvasElementItemComponent({
@@ -51,11 +43,9 @@ function CanvasElementItemComponent({
   drawing = false,
   onGestureStart,
   onSelect,
-  onDelete,
   onStartEditing,
   onCommitText,
   onCancelEditing,
-  onStyleChange,
 }: CanvasElementItemProps) {
   const articleRef = useRef<HTMLElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -70,9 +60,6 @@ function CanvasElementItemComponent({
     velocityY: 0,
     lastTime: 0,
   });
-  const [toolbarPlacement, setToolbarPlacement] = useState<"left" | "right">(
-    "right",
-  );
   const elementText = "text" in element ? element.text : "";
   const draftRef = useRef(elementText);
 
@@ -88,24 +75,11 @@ function CanvasElementItemComponent({
     textarea?.select();
   }, [editing, element.id, element.type, elementText]);
 
-  useEffect(() => {
-    if (!selected) return;
-    const updatePlacement = () => {
-      const rect = articleRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setToolbarPlacement(
-        window.innerWidth - rect.right < 260 ? "left" : "right",
-      );
-    };
-    updatePlacement();
-    window.addEventListener("resize", updatePlacement);
-    return () => window.removeEventListener("resize", updatePlacement);
-  }, [selected, element.x, element.y, element.width, element.height]);
-
   const style = {
     width: element.width,
     height: element.height,
     zIndex: element.zIndex,
+    opacity: element.opacity ?? 1,
     transform: `translate3d(${element.x - element.width / 2}px, ${element.y - element.height / 2}px, 0) rotate(${element.rotation}deg)`,
   } satisfies CSSProperties;
 
@@ -127,15 +101,19 @@ function CanvasElementItemComponent({
     }
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      commitText();
+      commitText(event.currentTarget.value);
     }
   };
 
   const handleElementPointerDown = (event: PointerEvent<HTMLElement>) => {
-    if (editing) {
-      event.stopPropagation();
+    if (editing) return;
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-canvas-ui]")
+    ) {
       return;
     }
+    event.stopPropagation();
     onSelect(element.id);
     onGestureStart(event, element, "move");
   };
@@ -143,52 +121,43 @@ function CanvasElementItemComponent({
   const applyHoloPointer = useCallback((x: number, y: number) => {
     const article = articleRef.current;
     if (!article) return;
-    const offsetX = x - 0.5;
-    const offsetY = y - 0.5;
-    const distance = Math.min(1, Math.hypot(offsetX, offsetY) * 1.8);
-    article.style.setProperty("--text-holo-x", `${x * 100}%`);
-    article.style.setProperty("--text-holo-y", `${y * 100}%`);
-    article.style.setProperty(
-      "--text-holo-angle",
-      `${112 + offsetX * 34 - offsetY * 22}deg`,
-    );
-    article.style.setProperty(
-      "--text-holo-opacity",
-      `${0.66 + distance * 0.24}`,
-    );
+    const shiftX = (x - 0.5) * 26;
+    const shiftY = (y - 0.5) * 32;
+    const angle = 112 + (x - 0.5) * 56 + (y - 0.5) * 36;
+    article.style.setProperty("--text-holo-x", `${(x * 100).toFixed(1)}%`);
+    article.style.setProperty("--text-holo-y", `${(y * 100).toFixed(1)}%`);
+    article.style.setProperty("--text-holo-shift-x", `${shiftX.toFixed(1)}px`);
+    article.style.setProperty("--text-holo-shift-y", `${shiftY.toFixed(1)}px`);
+    article.style.setProperty("--text-holo-angle", `${angle.toFixed(1)}deg`);
   }, []);
 
   const scheduleHoloPointer = useCallback(
-    (x: number, y: number) => {
+    (targetX: number, targetY: number) => {
       const motion = holoMotionRef.current;
-      motion.targetX = x;
-      motion.targetY = y;
+      motion.targetX = targetX;
+      motion.targetY = targetY;
       if (holoFrameRef.current !== null) return;
-      motion.lastTime = 0;
 
       const tick = (now: number) => {
-        const deltaSeconds = motion.lastTime
-          ? Math.min(0.032, (now - motion.lastTime) / 1_000)
-          : 1 / 60;
+        const delta = motion.lastTime ? Math.min(34, now - motion.lastTime) : 16;
         motion.lastTime = now;
-        const stiffness = 230;
-        const damping = 24;
-        motion.velocityX +=
-          (motion.targetX - motion.x) * stiffness * deltaSeconds -
-          motion.velocityX * damping * deltaSeconds;
-        motion.velocityY +=
-          (motion.targetY - motion.y) * stiffness * deltaSeconds -
-          motion.velocityY * damping * deltaSeconds;
-        motion.x += motion.velocityX * deltaSeconds;
-        motion.y += motion.velocityY * deltaSeconds;
+        const spring = 0.18;
+        const damping = 0.74;
+        motion.velocityX =
+          (motion.velocityX + (motion.targetX - motion.x) * spring) * damping;
+        motion.velocityY =
+          (motion.velocityY + (motion.targetY - motion.y) * spring) * damping;
+        motion.x += motion.velocityX * (delta / 16);
+        motion.y += motion.velocityY * (delta / 16);
         applyHoloPointer(motion.x, motion.y);
 
-        const unsettled =
-          Math.abs(motion.targetX - motion.x) > 0.0005 ||
-          Math.abs(motion.targetY - motion.y) > 0.0005 ||
-          Math.abs(motion.velocityX) > 0.002 ||
-          Math.abs(motion.velocityY) > 0.002;
-        if (unsettled) {
+        const settled =
+          Math.abs(motion.targetX - motion.x) < 0.002 &&
+          Math.abs(motion.targetY - motion.y) < 0.002 &&
+          Math.abs(motion.velocityX) < 0.001 &&
+          Math.abs(motion.velocityY) < 0.001;
+
+        if (!settled) {
           holoFrameRef.current = requestAnimationFrame(tick);
           return;
         }
@@ -271,7 +240,7 @@ function CanvasElementItemComponent({
           className="canvas-shape-visual"
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
-          aria-label={element.shape}
+          aria-label="图形"
         >
           {element.shape === "rectangle" ? (
             <rect
@@ -353,7 +322,7 @@ function CanvasElementItemComponent({
         <textarea
           ref={textareaRef}
           defaultValue={elementText}
-          aria-label="Edit text"
+          aria-label="编辑文字"
           onChange={(event) => {
             draftRef.current = event.target.value;
           }}
@@ -461,7 +430,7 @@ function CanvasElementItemComponent({
       data-drawing={drawing}
       data-text-holo={element.type === "text" && element.holoEnabled}
       style={style}
-      aria-label={element.type}
+      aria-label={isTextual ? "文字" : "图形"}
       role="group"
       tabIndex={0}
       onFocus={() => onSelect(element.id)}
@@ -480,7 +449,7 @@ function CanvasElementItemComponent({
           <button
             className="simple-sticker-rotate"
             type="button"
-            aria-label="Rotate element"
+            aria-label="旋转元素"
             onPointerDown={(event) => startGesture(event, "rotate")}
           >
             <Icon name="rotate" />
@@ -488,28 +457,20 @@ function CanvasElementItemComponent({
           <button
             className="simple-sticker-corner tr"
             type="button"
-            aria-label="Resize element"
+            aria-label="调整元素大小"
             onPointerDown={(event) => startGesture(event, "resize")}
           />
           <button
             className="simple-sticker-resize-bl"
             type="button"
-            aria-label="Resize element"
+            aria-label="调整元素大小"
             onPointerDown={(event) => startGesture(event, "resize")}
           />
           <button
             className="simple-sticker-resize"
             type="button"
-            aria-label="Resize element"
+            aria-label="调整元素大小"
             onPointerDown={(event) => startGesture(event, "resize")}
-          />
-          <CanvasPropertiesToolbar
-            element={element}
-            placement={toolbarPlacement}
-            onChange={(patch, commit) =>
-              onStyleChange(element.id, patch, commit)
-            }
-            onDelete={() => onDelete(element)}
           />
         </>
       ) : null}

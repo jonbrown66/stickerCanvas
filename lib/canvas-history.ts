@@ -27,11 +27,18 @@ export function toCanvasElementRecord(
     y: imageElement.y,
     rotation: imageElement.rotation,
     zIndex: imageElement.zIndex,
+    opacity: imageElement.opacity,
     createdAt: imageElement.createdAt,
     outlineWidth: imageElement.outlineWidth,
     outlineColor: imageElement.outlineColor,
     oilFilmEnabled: imageElement.oilFilmEnabled,
     isCutout: imageElement.isCutout,
+    cornerRadius: imageElement.cornerRadius,
+    cornerRadiusEnabled: imageElement.cornerRadiusEnabled,
+    shadowEnabled: imageElement.shadowEnabled,
+    shadowBlur: imageElement.shadowBlur,
+    crop: imageElement.crop ? { ...imageElement.crop } : undefined,
+    originalImage: imageElement.originalImage,
   };
 }
 

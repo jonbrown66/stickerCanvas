@@ -113,10 +113,10 @@ sub-agent reporting success is not final verification.
 
 Run validation in proportion to the change:
 
-- `npm run typecheck` for TypeScript changes.
-- `npm run lint` for source and style changes.
+- `pnpm run typecheck` for TypeScript changes.
+- `pnpm run lint` for source and style changes.
 - `node --test tests/*.test.mjs` for behavior covered by the current tests.
-- `npm run build` for dependency, bundling, worker, WebGL, or production-path
+- `pnpm run build` for dependency, bundling, worker, WebGL, or production-path
   changes.
 
 For visual interactions, verify the exact state transition when practical, but

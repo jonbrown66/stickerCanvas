@@ -6,37 +6,38 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type CSSProperties,
   type PointerEvent,
 } from "react";
 import type {
+  CanvasCropHandle,
   CanvasSticker,
   StickerGestureKind,
-  StickerStyleOptions,
+} from "@/lib/canvas-types";
+import {
+  DEFAULT_IMAGE_CROP,
+  DEFAULT_STICKER_CORNER_RADIUS,
+  DEFAULT_STICKER_SHADOW_BLUR,
+  MAX_STICKER_CORNER_RADIUS,
+  MAX_STICKER_SHADOW_BLUR,
+  normalizeCanvasImageCrop,
 } from "@/lib/canvas-types";
 import { Icon } from "./Icon";
-import { StickerSettingsPanel } from "./StickerSettingsPanel";
 
 interface StickerCanvasItemProps {
   sticker: CanvasSticker;
   selected: boolean;
   entering: boolean;
   isProcessing?: boolean;
+  cropMode?: boolean;
   onGestureStart: (
     event: PointerEvent<HTMLElement>,
     sticker: CanvasSticker,
     kind: StickerGestureKind,
-  ) => void;
-  onDelete: (sticker: CanvasSticker) => void;
-  onDownload: (sticker: CanvasSticker) => void;
-  onCutout?: (sticker: CanvasSticker) => void;
-  onUpdateStyle: (
-    stickerId: string,
-    patch: Partial<StickerStyleOptions>,
-    commit?: boolean,
+    cropHandle?: CanvasCropHandle,
   ) => void;
   onSelect: (stickerId: string) => void;
+  onToggleCrop?: (stickerId: string) => void;
 }
 
 function StickerCanvasItemComponent({
@@ -44,12 +45,10 @@ function StickerCanvasItemComponent({
   selected,
   entering,
   isProcessing = false,
+  cropMode = false,
   onGestureStart,
-  onDelete,
-  onDownload,
-  onCutout,
-  onUpdateStyle,
   onSelect,
+  onToggleCrop,
 }: StickerCanvasItemProps) {
   const articleRef = useRef<HTMLElement>(null);
   const holoFrameRef = useRef<number | null>(null);
@@ -64,24 +63,6 @@ function StickerCanvasItemComponent({
   });
   const holoBorderGlintRef = useRef<SVGCircleElement>(null);
   const holoBorderSpectrumRef = useRef<SVGRectElement>(null);
-  const [placement, setPlacement] = useState<"left" | "right">("right");
-
-  useEffect(() => {
-    if (!selected) return;
-    const updatePlacement = () => {
-      if (!articleRef.current) return;
-      const rect = articleRef.current.getBoundingClientRect();
-      if (rect.right + 200 > window.innerWidth) {
-        setPlacement("left");
-      } else {
-        setPlacement("right");
-      }
-    };
-    updatePlacement();
-    window.addEventListener("resize", updatePlacement);
-    return () => window.removeEventListener("resize", updatePlacement);
-  }, [selected, sticker.x, sticker.y, sticker.width, sticker.rotation]);
-
   const outlineId = useMemo(
     () => `sticker-outline-${sticker.id.replace(/[^a-zA-Z0-9_-]/g, "")}`,
     [sticker.id],
@@ -234,6 +215,27 @@ function StickerCanvasItemComponent({
     [],
   );
 
+  const shadowBlur =
+    sticker.shadowEnabled === false
+      ? 0
+      : Math.min(
+          MAX_STICKER_SHADOW_BLUR,
+          Math.max(0, sticker.shadowBlur ?? DEFAULT_STICKER_SHADOW_BLUR),
+        );
+  const cornerRadius =
+    sticker.cornerRadiusEnabled === false
+      ? 0
+      : Math.min(
+          MAX_STICKER_CORNER_RADIUS,
+          Math.max(0, sticker.cornerRadius ?? DEFAULT_STICKER_CORNER_RADIUS),
+          sticker.width / 2,
+          sticker.height / 2,
+        );
+
+  const crop = normalizeCanvasImageCrop(sticker.crop) ?? DEFAULT_IMAGE_CROP;
+  const hasCrop =
+    crop.x > 0 || crop.y > 0 || crop.width < 1 || crop.height < 1;
+
   const imgFilter = useMemo(() => {
     const filters: string[] = [];
 
@@ -241,21 +243,34 @@ function StickerCanvasItemComponent({
       filters.push(`url(#${outlineId})`);
     }
 
-    filters.push(selected ? "drop-shadow(0 16px 14px rgba(0,0,0,0.24))" : "drop-shadow(0 12px 10px rgba(0,0,0,0.18))");
+    if (shadowBlur > 0) {
+      const shadowOffset = Math.max(4, Math.round(shadowBlur * 0.8));
+      filters.push(
+        `drop-shadow(0 ${shadowOffset}px ${shadowBlur}px rgba(0,0,0,${
+          selected ? 0.24 : 0.18
+        }))`,
+      );
+    }
 
     if (isProcessing) {
       filters.push("blur(10px) brightness(0.85)");
     }
 
     return filters.join(" ");
-  }, [sticker.outlineWidth, outlineId, isProcessing, selected]);
+  }, [isProcessing, outlineId, selected, shadowBlur, sticker.outlineWidth]);
 
   const style = {
     width: sticker.width,
     height: sticker.height,
     zIndex: sticker.zIndex,
+    opacity: sticker.opacity ?? 1,
     transform: `translate3d(${sticker.x - sticker.width / 2}px, ${sticker.y - sticker.height / 2}px, 0) rotate(${sticker.rotation}deg)`,
-  } satisfies CSSProperties;
+    "--sticker-radius": `${cornerRadius}px`,
+    "--image-crop-left": `${-(crop.x / crop.width) * 100}%`,
+    "--image-crop-top": `${-(crop.y / crop.height) * 100}%`,
+    "--image-crop-width": `${(1 / crop.width) * 100}%`,
+    "--image-crop-height": `${(1 / crop.height) * 100}%`,
+  } as CSSProperties;
 
   const imgStyle = {
     filter: imgFilter,
@@ -272,13 +287,6 @@ function StickerCanvasItemComponent({
     WebkitMaskPosition: "center",
   } satisfies CSSProperties;
 
-  const handleStyleChange = useCallback(
-    (patch: Partial<StickerStyleOptions>, commit = true) => {
-      onUpdateStyle(sticker.id, patch, commit);
-    },
-    [onUpdateStyle, sticker.id],
-  );
-
   return (
     <article
       ref={articleRef}
@@ -287,13 +295,21 @@ function StickerCanvasItemComponent({
       data-selected={selected}
       data-entering={entering}
       data-processing={isProcessing}
+      data-crop-mode={cropMode}
+      data-cropped={hasCrop}
       data-holo={Boolean(sticker.oilFilmEnabled)}
       style={style}
-      aria-label="Sticker"
+      aria-label="贴纸"
       role="group"
       tabIndex={0}
       onFocus={() => onSelect(sticker.id)}
-      onPointerDown={(event) => onGestureStart(event, sticker, "move")}
+      onPointerDown={(event) => {
+        if (isProcessing) return;
+        onGestureStart(event, sticker, "move");
+      }}
+      onDoubleClick={() => {
+        if (!isProcessing) onToggleCrop?.(sticker.id);
+      }}
       onPointerEnter={handleHoloPointerMove}
       onPointerMove={handleHoloPointerMove}
       onPointerLeave={handleHoloPointerLeave}
@@ -463,19 +479,55 @@ function StickerCanvasItemComponent({
           className="simple-sticker-processing-overlay"
           data-canvas-ui
           role="status"
-          aria-label="Removing background"
+          aria-label="正在移除背景"
         >
           <span className="simple-processing-spinner" aria-hidden="true" />
         </div>
       ) : null}
 
       {selected && !isProcessing ? (
-        <>
-          {/* 左上角：旋转句柄 */}
+        cropMode ? (
+          <>
+            <button
+              className="simple-sticker-crop-handle simple-sticker-crop-nw"
+              type="button"
+              aria-label="裁剪左上角"
+              onPointerDown={(event) =>
+                onGestureStart(event, sticker, "crop", "nw")
+              }
+            />
+            <button
+              className="simple-sticker-crop-handle simple-sticker-crop-ne"
+              type="button"
+              aria-label="裁剪右上角"
+              onPointerDown={(event) =>
+                onGestureStart(event, sticker, "crop", "ne")
+              }
+            />
+            <button
+              className="simple-sticker-crop-handle simple-sticker-crop-sw"
+              type="button"
+              aria-label="裁剪左下角"
+              onPointerDown={(event) =>
+                onGestureStart(event, sticker, "crop", "sw")
+              }
+            />
+            <button
+              className="simple-sticker-crop-handle simple-sticker-crop-se"
+              type="button"
+              aria-label="裁剪右下角"
+              onPointerDown={(event) =>
+                onGestureStart(event, sticker, "crop", "se")
+              }
+            />
+          </>
+        ) : (
+          <>
+          {/* 顶部：旋转句柄 */}
           <button
             className="simple-sticker-rotate"
             type="button"
-            aria-label="Rotate sticker"
+            aria-label="旋转贴纸"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "rotate")
             }
@@ -487,7 +539,7 @@ function StickerCanvasItemComponent({
           <button
             className="simple-sticker-corner tr"
             type="button"
-            aria-label="Resize sticker"
+            aria-label="调整贴纸大小"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }
@@ -495,7 +547,7 @@ function StickerCanvasItemComponent({
           <button
             className="simple-sticker-resize-bl"
             type="button"
-            aria-label="Resize sticker"
+            aria-label="调整贴纸大小"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }
@@ -503,22 +555,14 @@ function StickerCanvasItemComponent({
           <button
             className="simple-sticker-resize"
             type="button"
-            aria-label="Resize sticker"
+            aria-label="调整贴纸大小"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }
           />
 
-          {/* 选中贴纸自动弹出 Floating Toolbar（具备智能视口翻转防遮挡功能） */}
-          <StickerSettingsPanel
-            sticker={sticker}
-            placement={placement}
-            onStyleChange={handleStyleChange}
-            onDelete={() => onDelete(sticker)}
-            onDownload={() => onDownload(sticker)}
-            onCutout={onCutout ? () => onCutout(sticker) : undefined}
-          />
-        </>
+          </>
+        )
       ) : null}
     </article>
   );

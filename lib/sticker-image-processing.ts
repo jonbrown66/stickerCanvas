@@ -1,4 +1,12 @@
 import { renderStaticHoloBorder, renderStaticOilFilm } from "./oil-film-render";
+import type { CanvasImageCrop, StickerStyleOptions } from "./canvas-types";
+import {
+  DEFAULT_STICKER_CORNER_RADIUS,
+  DEFAULT_STICKER_SHADOW_BLUR,
+  MAX_STICKER_CORNER_RADIUS,
+  MAX_STICKER_SHADOW_BLUR,
+  normalizeCanvasImageCrop,
+} from "./canvas-types";
 
 export type AlphaBounds = {
   left: number;
@@ -12,6 +20,39 @@ export type ProcessedStickerImage = {
   width: number;
   height: number;
 };
+
+type StickerExportOptions = Pick<
+  StickerStyleOptions,
+  | "opacity"
+  | "oilFilmEnabled"
+  | "cornerRadius"
+  | "cornerRadiusEnabled"
+  | "shadowEnabled"
+  | "shadowBlur"
+  | "crop"
+>;
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function roundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  const safeRadius = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + safeRadius, y);
+  context.arcTo(x + width, y, x + width, y + height, safeRadius);
+  context.arcTo(x + width, y + height, x, y + height, safeRadius);
+  context.arcTo(x, y + height, x, y, safeRadius);
+  context.arcTo(x, y, x + width, y, safeRadius);
+  context.closePath();
+}
 
 export function findAlphaBounds(
   pixels: Uint8ClampedArray,
@@ -61,6 +102,54 @@ export async function ensurePngBlob(blob: Blob) {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("PNG unavailable");
     context.drawImage(image, 0, 0);
+    return await canvasToBlob(canvas);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function cropImageBlob(
+  blob: Blob,
+  crop: CanvasImageCrop,
+): Promise<Blob> {
+  const safeCrop = normalizeCanvasImageCrop(crop);
+  if (!safeCrop) return ensurePngBlob(blob);
+
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+
+    const naturalWidth = Math.max(1, image.naturalWidth || image.width);
+    const naturalHeight = Math.max(1, image.naturalHeight || image.height);
+    const sourceWidth = Math.max(1, Math.round(naturalWidth * safeCrop.width));
+    const sourceHeight = Math.max(1, Math.round(naturalHeight * safeCrop.height));
+    const sourceX = Math.min(
+      naturalWidth - sourceWidth,
+      Math.max(0, Math.round(naturalWidth * safeCrop.x)),
+    );
+    const sourceY = Math.min(
+      naturalHeight - sourceHeight,
+      Math.max(0, Math.round(naturalHeight * safeCrop.y)),
+    );
+
+    const canvas = document.createElement("canvas");
+    canvas.width = sourceWidth;
+    canvas.height = sourceHeight;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Image crop unavailable");
+    context.drawImage(
+      image,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      0,
+      0,
+      sourceWidth,
+      sourceHeight,
+    );
     return await canvasToBlob(canvas);
   } finally {
     URL.revokeObjectURL(url);
@@ -145,9 +234,38 @@ export async function exportStickerWithOutline(
   displayWidth: number,
   outlineWidth: number,
   outlineColor: string = "#ffffff",
-  options: { oilFilmEnabled?: boolean } = {},
+  options: StickerExportOptions = {},
 ): Promise<Blob> {
-  if ((!outlineWidth || outlineWidth <= 0) && !options.oilFilmEnabled) {
+  const cornerRadius =
+    options.cornerRadiusEnabled === false
+      ? 0
+      : clamp(
+          options.cornerRadius ?? DEFAULT_STICKER_CORNER_RADIUS,
+          0,
+          MAX_STICKER_CORNER_RADIUS,
+        );
+  const shadowBlur =
+    options.shadowEnabled === false
+      ? 0
+      : clamp(
+          options.shadowBlur ?? DEFAULT_STICKER_SHADOW_BLUR,
+          0,
+        MAX_STICKER_SHADOW_BLUR,
+      );
+  const opacity = clamp(options.opacity ?? 1, 0, 1);
+  const crop = normalizeCanvasImageCrop(options.crop);
+  const hasCrop = Boolean(
+    crop &&
+      (crop.x > 0 || crop.y > 0 || crop.width < 1 || crop.height < 1),
+  );
+  if (
+    (!outlineWidth || outlineWidth <= 0) &&
+    !options.oilFilmEnabled &&
+    cornerRadius <= 0 &&
+    shadowBlur <= 0 &&
+    opacity >= 1 &&
+    !hasCrop
+  ) {
     return ensurePngBlob(imageBlob);
   }
 
@@ -159,15 +277,31 @@ export async function exportStickerWithOutline(
 
     const naturalWidth = Math.max(1, img.naturalWidth || img.width);
     const naturalHeight = Math.max(1, img.naturalHeight || img.height);
+    const sourceWidth = Math.max(
+      1,
+      Math.round(naturalWidth * (crop?.width ?? 1)),
+    );
+    const sourceHeight = Math.max(
+      1,
+      Math.round(naturalHeight * (crop?.height ?? 1)),
+    );
+    const sourceX = Math.min(
+      naturalWidth - sourceWidth,
+      Math.max(0, Math.round(naturalWidth * (crop?.x ?? 0))),
+    );
+    const sourceY = Math.min(
+      naturalHeight - sourceHeight,
+      Math.max(0, Math.round(naturalHeight * (crop?.y ?? 0))),
+    );
     const maximumSide = 4096;
     const maximumPixels = 12_000_000;
     const renderScale = Math.min(
       1,
-      maximumSide / Math.max(naturalWidth, naturalHeight),
-      Math.sqrt(maximumPixels / (naturalWidth * naturalHeight)),
+      maximumSide / Math.max(sourceWidth, sourceHeight),
+      Math.sqrt(maximumPixels / (sourceWidth * sourceHeight)),
     );
-    const renderedWidth = Math.max(1, Math.round(naturalWidth * renderScale));
-    const renderedHeight = Math.max(1, Math.round(naturalHeight * renderScale));
+    const renderedWidth = Math.max(1, Math.round(sourceWidth * renderScale));
+    const renderedHeight = Math.max(1, Math.round(sourceHeight * renderScale));
     const scale = renderedWidth / Math.max(1, displayWidth);
     const scaledOutlineWidth =
       outlineWidth > 0 ? Math.max(0.75, outlineWidth * scale) : 0;
@@ -175,9 +309,16 @@ export async function exportStickerWithOutline(
       outlineWidth > 0
         ? Math.max(0.75, Math.max(2.4, outlineWidth * 0.35) * scale)
         : 0;
+    const scaledCornerRadius = cornerRadius * scale;
+    const scaledShadowBlur = shadowBlur * scale;
+    const scaledShadowOffset =
+      scaledShadowBlur > 0 ? Math.max(4 * scale, scaledShadowBlur * 0.8) : 0;
 
     const padding = Math.ceil(
-      scaledOutlineWidth + scaledBlurRadius * 2 + 2,
+      Math.max(
+        scaledOutlineWidth + scaledBlurRadius * 2 + 2,
+        scaledShadowBlur + scaledShadowOffset + 2,
+      ),
     );
     const w = renderedWidth + padding * 2;
     const h = renderedHeight + padding * 2;
@@ -188,82 +329,97 @@ export async function exportStickerWithOutline(
     const sCtx = sourceCanvas.getContext("2d");
     if (!sCtx) throw new Error("Export canvas unavailable");
 
+    sCtx.save();
+    if (scaledCornerRadius > 0) {
+      roundedRect(
+        sCtx,
+        padding,
+        padding,
+        renderedWidth,
+        renderedHeight,
+        scaledCornerRadius,
+      );
+      sCtx.clip();
+    }
     sCtx.drawImage(
       img,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
       padding,
       padding,
       renderedWidth,
       renderedHeight,
     );
-    let pixels = sCtx.getImageData(0, 0, w, h).data;
-
+    sCtx.restore();
     const size = w * h;
     const pixelBufferLength = size * 4;
-    const alpha = new Uint8Array(size);
-    for (let i = 0; i < size; i += 1) {
-      alpha[i] = pixels[i * 4 + 3];
-    }
-
-    const dist = new Float32Array(size);
-    const INF = 1e9;
-    for (let i = 0; i < size; i += 1) {
-      dist[i] = alpha[i] > 15 ? 0 : INF;
-    }
-
-    for (let x = 0; x < w; x += 1) {
-      for (let y = 1; y < h; y += 1) {
-        const idx = y * w + x;
-        const prev = (y - 1) * w + x;
-        if (dist[idx] > dist[prev] + 1) dist[idx] = dist[prev] + 1;
-      }
-      for (let y = h - 2; y >= 0; y -= 1) {
-        const idx = y * w + x;
-        const next = (y + 1) * w + x;
-        if (dist[idx] > dist[next] + 1) dist[idx] = dist[next] + 1;
-      }
-    }
-
-    const d1 = 1.0;
-    const d2 = Math.SQRT2;
-    for (let y = 0; y < h; y += 1) {
-      const row = y * w;
-      for (let x = 1; x < w; x += 1) {
-        const idx = row + x;
-        let minD = dist[idx];
-        minD = Math.min(minD, dist[idx - 1] + d1);
-        if (y > 0) {
-          minD = Math.min(minD, dist[idx - w] + d1);
-          minD = Math.min(minD, dist[idx - w - 1] + d2);
-          if (x < w - 1) minD = Math.min(minD, dist[idx - w + 1] + d2);
-        }
-        dist[idx] = minD;
-      }
-      for (let x = w - 2; x >= 0; x -= 1) {
-        const idx = row + x;
-        let minD = dist[idx];
-        minD = Math.min(minD, dist[idx + 1] + d1);
-        if (y < h - 1) {
-          minD = Math.min(minD, dist[idx + w] + d1);
-          minD = Math.min(minD, dist[idx + w + 1] + d2);
-          if (x > 0) minD = Math.min(minD, dist[idx + w - 1] + d2);
-        }
-        dist[idx] = minD;
-      }
-    }
-
     let r = 255, g = 255, b = 255;
-    if (outlineColor.startsWith("#")) {
-      const hex = outlineColor.slice(1);
-      if (hex.length === 6) {
-        r = parseInt(hex.slice(0, 2), 16);
-        g = parseInt(hex.slice(2, 4), 16);
-        b = parseInt(hex.slice(4, 6), 16);
+    let dist: Float32Array | null = null;
+    if (scaledOutlineWidth > 0) {
+      const pixels = sCtx.getImageData(0, 0, w, h).data;
+      const alpha = new Uint8Array(size);
+      for (let i = 0; i < size; i += 1) {
+        alpha[i] = pixels[i * 4 + 3];
+      }
+
+      dist = new Float32Array(size);
+      const INF = 1e9;
+      for (let i = 0; i < size; i += 1) {
+        dist[i] = alpha[i] > 15 ? 0 : INF;
+      }
+
+      for (let x = 0; x < w; x += 1) {
+        for (let y = 1; y < h; y += 1) {
+          const idx = y * w + x;
+          const prev = (y - 1) * w + x;
+          if (dist[idx] > dist[prev] + 1) dist[idx] = dist[prev] + 1;
+        }
+        for (let y = h - 2; y >= 0; y -= 1) {
+          const idx = y * w + x;
+          const next = (y + 1) * w + x;
+          if (dist[idx] > dist[next] + 1) dist[idx] = dist[next] + 1;
+        }
+      }
+
+      const d1 = 1.0;
+      const d2 = Math.SQRT2;
+      for (let y = 0; y < h; y += 1) {
+        const row = y * w;
+        for (let x = 1; x < w; x += 1) {
+          const idx = row + x;
+          let minD = dist[idx];
+          minD = Math.min(minD, dist[idx - 1] + d1);
+          if (y > 0) {
+            minD = Math.min(minD, dist[idx - w] + d1);
+            minD = Math.min(minD, dist[idx - w - 1] + d2);
+            if (x < w - 1) minD = Math.min(minD, dist[idx - w + 1] + d2);
+          }
+          dist[idx] = minD;
+        }
+        for (let x = w - 2; x >= 0; x -= 1) {
+          const idx = row + x;
+          let minD = dist[idx];
+          minD = Math.min(minD, dist[idx + 1] + d1);
+          if (y < h - 1) {
+            minD = Math.min(minD, dist[idx + w] + d1);
+            minD = Math.min(minD, dist[idx + w + 1] + d2);
+            if (x > 0) minD = Math.min(minD, dist[idx + w - 1] + d2);
+          }
+          dist[idx] = minD;
+        }
+      }
+
+      if (outlineColor.startsWith("#")) {
+        const hex = outlineColor.slice(1);
+        if (hex.length === 6) {
+          r = parseInt(hex.slice(0, 2), 16);
+          g = parseInt(hex.slice(2, 4), 16);
+          b = parseInt(hex.slice(4, 6), 16);
+        }
       }
     }
-
-    pixels = new Uint8ClampedArray(0);
-    sourceCanvas.width = 1;
-    sourceCanvas.height = 1;
 
     const outputCanvas = document.createElement("canvas");
     outputCanvas.width = w;
@@ -271,9 +427,17 @@ export async function exportStickerWithOutline(
     const oCtx = outputCanvas.getContext("2d");
     if (!oCtx) throw new Error("Export canvas unavailable");
 
+    if (scaledShadowBlur > 0) {
+      oCtx.save();
+      oCtx.filter = `drop-shadow(0 ${scaledShadowOffset}px ${scaledShadowBlur}px rgba(0,0,0,0.2))`;
+      oCtx.drawImage(sourceCanvas, 0, 0);
+      oCtx.restore();
+    }
+
     let maskCanvas: HTMLCanvasElement | null = null;
     let softenedMaskCanvas: HTMLCanvasElement | null = null;
     if (scaledOutlineWidth > 0) {
+      if (!dist) throw new Error("Outline mask unavailable");
       let maskPixels = new Uint8ClampedArray(pixelBufferLength);
       for (let i = 0; i < size; i += 1) {
         const coverage = Math.max(
@@ -337,13 +501,7 @@ export async function exportStickerWithOutline(
       holoBorder.height = 1;
     }
 
-    oCtx.drawImage(
-      img,
-      padding,
-      padding,
-      renderedWidth,
-      renderedHeight,
-    );
+    oCtx.drawImage(sourceCanvas, 0, 0);
 
     if (options.oilFilmEnabled) {
       const oilCanvas = document.createElement("canvas");
@@ -351,13 +509,22 @@ export async function exportStickerWithOutline(
       oilCanvas.height = h;
       const oilContext = oilCanvas.getContext("2d");
       if (!oilContext) throw new Error("Export canvas unavailable");
-      oilContext.drawImage(img, padding, padding, renderedWidth, renderedHeight);
+      oilContext.drawImage(sourceCanvas, 0, 0);
       renderStaticOilFilm(oilContext, w, h);
       oilContext.globalCompositeOperation = "destination-in";
-      oilContext.drawImage(img, padding, padding, renderedWidth, renderedHeight);
+      oilContext.drawImage(sourceCanvas, 0, 0);
       oCtx.drawImage(oilCanvas, 0, 0);
       oilCanvas.width = 1;
       oilCanvas.height = 1;
+    }
+
+    if (opacity < 1) {
+      oCtx.save();
+      oCtx.globalCompositeOperation = "destination-in";
+      oCtx.globalAlpha = opacity;
+      oCtx.fillStyle = "#ffffff";
+      oCtx.fillRect(0, 0, w, h);
+      oCtx.restore();
     }
 
     const exportBlob = await canvasToBlob(outputCanvas);
@@ -371,6 +538,8 @@ export async function exportStickerWithOutline(
     }
     outputCanvas.width = 1;
     outputCanvas.height = 1;
+    sourceCanvas.width = 1;
+    sourceCanvas.height = 1;
 
     return exportBlob;
   } finally {

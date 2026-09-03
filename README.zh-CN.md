@@ -12,23 +12,31 @@ Sticker Canvas 是一个本地优先的轻量创作画布：把照片做成贴�
 - 需要时在浏览器本地抠图。
 - 添加贴纸描边和轻量油膜 / 镭射效果。
 - 下载当前画布 PNG，包含米白点阵纸张背景、图片、文字、图形和位置关系。
+- 界面会根据窗口尺寸自适应：桌面端使用顶部工具栏，手机端使用底部工具栏；横屏手机的 Inspector 会切换为侧边面板。
 - 所有内容保存在当前浏览器，不需要账号，也不会上传到业务服务器。
 
 ## 快速开始
 
+本项目使用 pnpm 12.2.1。如果 Windows 尚未安装 pnpm，请使用官方 standalone 安装脚本（不需要 Corepack）：
+
+```powershell
+$env:PNPM_VERSION="12.2.1"
+Invoke-WebRequest https://get.pnpm.io/install.ps1 -UseBasicParsing | Invoke-Expression
+```
+
 ```bash
-npm ci
-npm run dev
+pnpm install --frozen-lockfile
+pnpm run dev
 ```
 
 按 Vite 提示打开本地地址，通常是 `http://localhost:5173`。
 
 ## 使用方式
 
-- 使用底部工具栏上传、拍照、添加文字、绘制图形或下载画布。
+- 使用桌面端顶部（移动端底部）工具栏上传、拍照、添加文字或绘制图形；左上角菜单提供历史记录、新建画布和下载。
+- 使用右下角控件缩放或适配全部内容。
 - 双击文字进入编辑；点击文字框外部即可完成输入。
-- 选中元素后，可以移动、缩放、旋转、删除或调整样式。
-- 选中图片后，点击剪刀图标即可本地抠图。
+- 选中图片后，右侧紧凑 Inspector 的图标开关可控制 Holo、去背景、圆角、阴影以及保存/删除；滑杆可调整描边、圆角大小、阴影柔和度和图片尺寸。文本与图形继续使用元素工具栏。
 - 下载会保留当前排版和米白点阵背景。
 
 ## 快捷键
@@ -47,11 +55,11 @@ npm run dev
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run dev` | 启动开发服务器 |
-| `npm run typecheck` | TypeScript 检查 |
-| `npm run lint` | ESLint 检查 |
-| `npm test` | 构建并运行测试 |
-| `npm run build` | 生成生产构建 |
+| `pnpm run dev` | 启动开发服务器 |
+| `pnpm run typecheck` | TypeScript 检查 |
+| `pnpm run lint` | ESLint 检查 |
+| `pnpm test` | 构建并运行测试 |
+| `pnpm run build` | 生成生产构建 |
 
 ## 隐私
 
