@@ -240,7 +240,7 @@ function CanvasElementItemComponent({
           className="canvas-shape-visual"
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
-          aria-label="图形"
+          aria-label="Shape"
         >
           {element.shape === "rectangle" ? (
             <rect
@@ -322,7 +322,7 @@ function CanvasElementItemComponent({
         <textarea
           ref={textareaRef}
           defaultValue={elementText}
-          aria-label="编辑文字"
+          aria-label="Edit text"
           onChange={(event) => {
             draftRef.current = event.target.value;
           }}
@@ -430,7 +430,7 @@ function CanvasElementItemComponent({
       data-drawing={drawing}
       data-text-holo={element.type === "text" && element.holoEnabled}
       style={style}
-      aria-label={isTextual ? "文字" : "图形"}
+      aria-label={isTextual ? "Text" : "Shape"}
       role="group"
       tabIndex={0}
       onFocus={() => onSelect(element.id)}
@@ -449,7 +449,7 @@ function CanvasElementItemComponent({
           <button
             className="simple-sticker-rotate"
             type="button"
-            aria-label="旋转元素"
+            aria-label="Rotate element"
             onPointerDown={(event) => startGesture(event, "rotate")}
           >
             <Icon name="rotate" />
@@ -457,19 +457,19 @@ function CanvasElementItemComponent({
           <button
             className="simple-sticker-corner tr"
             type="button"
-            aria-label="调整元素大小"
+            aria-label="Resize element"
             onPointerDown={(event) => startGesture(event, "resize")}
           />
           <button
             className="simple-sticker-resize-bl"
             type="button"
-            aria-label="调整元素大小"
+            aria-label="Resize element"
             onPointerDown={(event) => startGesture(event, "resize")}
           />
           <button
             className="simple-sticker-resize"
             type="button"
-            aria-label="调整元素大小"
+            aria-label="Resize element"
             onPointerDown={(event) => startGesture(event, "resize")}
           />
         </>

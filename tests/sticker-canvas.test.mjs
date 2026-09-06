@@ -74,7 +74,7 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.match(canvas, /crop: sticker\.crop/);
   assert.match(canvas, /opacity: sticker\.opacity/);
   assert.match(canvas, /<CanvasZoomControls[\s\S]*?onFitToContent=\{fitCanvasToContent\}/);
-  for (const label of ["画布历史", "新建画布", "下载画布"]) {
+  for (const label of ["Canvas history", "New canvas", "Download canvas"]) {
     assert.match(topbar, new RegExp(`aria-label="${label}"`));
     assert.match(topbar, new RegExp(`title="${label}"`));
     assert.doesNotMatch(topbar, new RegExp(`<span>${label}</span>`));
@@ -83,14 +83,14 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.doesNotMatch(topbar, /simple-canvas-title-block|simple-canvas-topbar-status/);
   assert.match(inspector, /className="canvas-properties-panel"/);
   assert.match(inspector, /data-element-type=\{element\.type\}/);
-  assert.match(inspector, /<details className="canvas-properties-advanced">[\s\S]*?<summary>更多操作<\/summary>/);
-  for (const heading of ["边角", "透明度", "图层", "操作"]) {
+  assert.match(inspector, /<details className="canvas-properties-advanced">[\s\S]*?<summary>More actions<\/summary>/);
+  for (const heading of ["Corners", "Opacity", "Layers", "Actions"]) {
     assert.match(inspector, new RegExp(`>${heading}<`));
   }
   assert.match(inspector, /canvas-properties-icon-button/);
-  assert.match(inspector, /aria-label="透明度"/);
+  assert.match(inspector, /aria-label="Opacity"/);
   assert.match(inspector, /icon="corners-square"/);
-  assert.match(inspector, /label="描边"/);
+  assert.match(inspector, /label="Outline"/);
   assert.match(inspector, /onToggleCutout/);
   assert.match(inspector, /icon="scissors"/);
   assert.match(inspector, /icon="eraser"/);
@@ -104,7 +104,7 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.doesNotMatch(inspector, /aspectLocked|Image rotation|canvas-inspector-lock|canvas-inspector-rotation/);
   assert.doesNotMatch(inspector, /className="[^"]*canvas-inspector[^"]*"/);
   assert.doesNotMatch(inspector, /canvas-element-properties-toolbar|canvas-image-properties-toolbar/);
-  assert.match(zoom, /aria-label="适合画布"/);
+  assert.match(zoom, /aria-label="Fit canvas"/);
   assert.match(storage, /indexedDB\.open/);
   assert.match(storage, /transactionDone/);
   assert.match(storage, /replaceStickerRecords/);
@@ -120,14 +120,14 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.match(processing, /normalizeCanvasImageCrop\(options\.crop\)/);
   assert.match(canvas, /sourceImageForCutout/);
   assert.match(item, /simple-sticker-crop-handle/);
-  assert.match(item, /裁剪左上角/);
+  assert.match(item, /Crop top left/);
   assert.match(styles, /data-crop-mode="true"/);
   assert.match(canvas, /restoreStickerSnapshot/);
   assert.match(canvas, /replaceStickerRecords/);
   assert.match(canvas, /processingRef\.current = true/);
   assert.match(canvas, /pointerSampleRef\.current = \{/);
   assert.match(canvas, /previewSticker\(gesture\.element, latest\)/);
-  assert.match(canvas, /setNotice\("抠图完成"\)/);
+  assert.match(canvas, /setNotice\("Background removed"\)/);
   assert.match(canvas, /const NOTICE_DURATION_MS = 4_200/);
   assert.match(canvas, /const noticeTimer = window\.setTimeout\(\(\) => \{[\s\S]*?current === notice/);
   assert.match(canvas, /return \(\) => window\.clearTimeout\(noticeTimer\)/);
@@ -153,7 +153,7 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.doesNotMatch(styles, /mix-blend-mode: (?:color-dodge|hard-light)/);
   assert.doesNotMatch(styles, /\.gallery-|\.export-|\.controls-card/);
   assert.doesNotMatch(html, /vibeloft|DebugPanel|MobileDemoMode/);
-  assert.match(html, /<html lang="zh-CN">/);
+  assert.match(html, /<html lang="en">/);
 
   const importFlow = canvas.slice(
     canvas.indexOf("const processFile"),
@@ -161,7 +161,7 @@ test("keeps canvas concerns split into focused modules", async () => {
   );
   assert.doesNotMatch(importFlow, /removeImageBackground/);
   assert.match(importFlow, /isCutout: false/);
-  assert.match(importFlow, /setNotice\("图片已添加"\)/);
+  assert.match(importFlow, /setNotice\("Image added"\)/);
 });
 
 test("drops external image files onto the canvas at the pointer location", async () => {

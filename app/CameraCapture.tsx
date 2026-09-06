@@ -12,7 +12,7 @@ interface CameraCaptureProps {
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("拍照失败"))),
+      (blob) => (blob ? resolve(blob) : reject(new Error("Could not take photo"))),
       "image/jpeg",
       0.92,
     );
@@ -46,7 +46,7 @@ export function CameraCapture({
 
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.getUserMedia) {
-      queueMicrotask(() => setError("相机不可用"));
+      queueMicrotask(() => setError("Camera is unavailable"));
       return;
     }
 
@@ -74,13 +74,13 @@ export function CameraCapture({
         const name =
           reason instanceof DOMException ? reason.name : "UnknownError";
         if (name === "NotAllowedError") {
-          setError("相机权限被拒绝");
+          setError("Camera permission was denied");
         } else if (name === "NotFoundError") {
-          setError("未找到相机");
+          setError("No camera was found");
         } else if (name === "NotReadableError") {
-          setError("相机正在被其他应用使用");
+          setError("Camera is being used by another app");
         } else {
-          setError("相机不可用");
+          setError("Camera is unavailable");
         }
       });
 
@@ -110,7 +110,7 @@ export function CameraCapture({
       canvas.width = width;
       canvas.height = height;
       const context = canvas.getContext("2d");
-      if (!context) throw new Error("拍照功能不可用");
+      if (!context) throw new Error("Photo capture is unavailable");
       if (facingMode === "user") {
         context.translate(width, 0);
         context.scale(-1, 1);
@@ -123,7 +123,7 @@ export function CameraCapture({
         new File([blob], `sticker-${Date.now()}.jpg`, { type: "image/jpeg" }),
       );
     } catch {
-      setError("拍照失败");
+      setError("Could not take photo");
       setCapturing(false);
     }
   };
@@ -134,7 +134,7 @@ export function CameraCapture({
       className="simple-camera"
       role="dialog"
       aria-modal="true"
-      aria-label="相机"
+      aria-label="Camera"
       data-canvas-ui
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
@@ -167,7 +167,7 @@ export function CameraCapture({
         ref={closeButtonRef}
         className="simple-camera-close"
         type="button"
-        aria-label="关闭相机"
+        aria-label="Close camera"
         onClick={onClose}
       >
         <Icon name="close" />
@@ -176,7 +176,7 @@ export function CameraCapture({
         <div className="simple-camera-error" role="alert">
           <p>{error}</p>
           <button type="button" onClick={onFallback}>
-            打开相机
+            Open camera
           </button>
         </div>
       ) : null}
@@ -192,13 +192,13 @@ export function CameraCapture({
             );
           }}
         >
-          切换镜头
+          Switch camera
         </button>
         <button
           className="simple-camera-shutter"
           type="button"
           disabled={!ready || capturing}
-          aria-label="拍照"
+          aria-label="Take photo"
           onClick={() => void capture()}
         >
           <span />

@@ -1,7 +1,5 @@
 # Sticker Canvas
 
-[中文说明](./README.zh-CN.md)
-
 Sticker Canvas is a local-first creative canvas for turning photos into stickers, then arranging them with text and simple shapes.
 
 ## Features
@@ -17,11 +15,11 @@ Sticker Canvas is a local-first creative canvas for turning photos into stickers
 
 ## Quick Start
 
-This project uses pnpm 12.2.1. If pnpm is not installed on Windows, use the official standalone installer:
+This project declares its pnpm version in `package.json`. Enable Corepack so it selects that version:
 
 ```powershell
-$env:PNPM_VERSION="12.2.1"
-Invoke-WebRequest https://get.pnpm.io/install.ps1 -UseBasicParsing | Invoke-Expression
+corepack enable
+pnpm --version
 ```
 
 ```bash

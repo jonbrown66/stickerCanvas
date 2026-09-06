@@ -26,6 +26,7 @@ export type CanvasProject = {
   createdAt: number;
   updatedAt: number;
   elements: CanvasElementRecord[];
+  isActive?: boolean;
 };
 
 function normalizeRecord(
@@ -223,9 +224,12 @@ export async function readCanvasElementRecords(): Promise<
 
 export async function saveCanvasElementRecord(
   element: CanvasElementRecord | CanvasElement,
+  isCurrent: () => boolean = () => true,
 ): Promise<void> {
   const record = toCanvasElementRecord(element);
   const database = await getDatabase();
+  // Check after opening the database, immediately before queuing the write.
+  if (!isCurrent()) return;
   const transaction = database.transaction(ELEMENT_STORE, "readwrite");
   transaction.objectStore(ELEMENT_STORE).put(record);
   await transactionDone(transaction);
@@ -281,6 +285,32 @@ export async function saveCanvasProject(
     elements: project.elements.map(toCanvasElementRecord),
   } satisfies CanvasProject);
   await transactionDone(transaction);
+}
+
+export async function switchCanvasProject(
+  previous: CanvasProject | null,
+  next: CanvasProject,
+): Promise<void> {
+  const database = await getDatabase();
+  const transaction = database.transaction(
+    [ELEMENT_STORE, CANVAS_PROJECT_STORE], "readwrite",
+  );
+  const done = transactionDone(transaction);
+  try {
+    const projects = transaction.objectStore(CANVAS_PROJECT_STORE);
+    if (previous) projects.put({
+      ...previous, isActive: false, elements: previous.elements.map(toCanvasElementRecord),
+    });
+    projects.put({ ...next, isActive: true, elements: next.elements.map(toCanvasElementRecord) });
+    const elements = transaction.objectStore(ELEMENT_STORE);
+    elements.clear();
+    next.elements.forEach((element) => elements.put(toCanvasElementRecord(element)));
+  } catch (error) {
+    transaction.abort();
+    await done.catch(() => {});
+    throw error;
+  }
+  await done;
 }
 
 // Compatibility aliases for modules that still use sticker-oriented names.

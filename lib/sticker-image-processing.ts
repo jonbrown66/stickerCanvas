@@ -229,13 +229,31 @@ export async function createOutlinedCutout(
   };
 }
 
-export async function exportStickerWithOutline(
+export function getStickerVisualPadding(outlineWidth: number, options: StickerExportOptions) {
+  const outline = Math.max(0, outlineWidth);
+  const outlinePadding = outline > 0 ? outline + Math.max(2.4, outline * 0.35) * 2 + 2 : 0;
+  const shadow = options.shadowEnabled === false ? 0 : clamp(
+    options.shadowBlur ?? DEFAULT_STICKER_SHADOW_BLUR, 0, MAX_STICKER_SHADOW_BLUR,
+  );
+  const shadowPadding = shadow > 0 ? shadow * 3 + Math.max(4, shadow * 0.8) + 2 : 0;
+  return Math.max(outlinePadding, shadowPadding);
+}
+
+export type RenderedSticker = {
+  canvas: HTMLCanvasElement;
+  padding: number;
+  contentWidth: number;
+  contentHeight: number;
+};
+
+export async function renderStickerWithOutline(
   imageBlob: Blob,
   displayWidth: number,
   outlineWidth: number,
   outlineColor: string = "#ffffff",
   options: StickerExportOptions = {},
-): Promise<Blob> {
+  renderSize?: { width: number; height: number },
+): Promise<RenderedSticker> {
   const cornerRadius =
     options.cornerRadiusEnabled === false
       ? 0
@@ -254,22 +272,14 @@ export async function exportStickerWithOutline(
       );
   const opacity = clamp(options.opacity ?? 1, 0, 1);
   const crop = normalizeCanvasImageCrop(options.crop);
-  const hasCrop = Boolean(
-    crop &&
-      (crop.x > 0 || crop.y > 0 || crop.width < 1 || crop.height < 1),
-  );
-  if (
-    (!outlineWidth || outlineWidth <= 0) &&
-    !options.oilFilmEnabled &&
-    cornerRadius <= 0 &&
-    shadowBlur <= 0 &&
-    opacity >= 1 &&
-    !hasCrop
-  ) {
-    return ensurePngBlob(imageBlob);
-  }
-
   const url = URL.createObjectURL(imageBlob);
+  const canvases: HTMLCanvasElement[] = [];
+  let retainedCanvas: HTMLCanvasElement | null = null;
+  const createCanvas = () => {
+    const canvas = document.createElement("canvas");
+    canvases.push(canvas);
+    return canvas;
+  };
   try {
     const img = new Image();
     img.src = url;
@@ -295,13 +305,19 @@ export async function exportStickerWithOutline(
     );
     const maximumSide = 4096;
     const maximumPixels = 12_000_000;
+    const requestedWidth = renderSize?.width ?? sourceWidth;
+    const requestedHeight = renderSize?.height ?? sourceHeight;
+    const requestedPadding = getStickerVisualPadding(outlineWidth, options) *
+      requestedWidth / Math.max(1, displayWidth);
+    const totalWidth = requestedWidth + requestedPadding * 2 + 4;
+    const totalHeight = requestedHeight + requestedPadding * 2 + 4;
     const renderScale = Math.min(
       1,
-      maximumSide / Math.max(sourceWidth, sourceHeight),
-      Math.sqrt(maximumPixels / (sourceWidth * sourceHeight)),
+      maximumSide / Math.max(totalWidth, totalHeight),
+      Math.sqrt(maximumPixels / (totalWidth * totalHeight)),
     );
-    const renderedWidth = Math.max(1, Math.round(sourceWidth * renderScale));
-    const renderedHeight = Math.max(1, Math.round(sourceHeight * renderScale));
+    const renderedWidth = Math.max(1, Math.round(requestedWidth * renderScale));
+    const renderedHeight = Math.max(1, Math.round(requestedHeight * renderScale));
     const scale = renderedWidth / Math.max(1, displayWidth);
     const scaledOutlineWidth =
       outlineWidth > 0 ? Math.max(0.75, outlineWidth * scale) : 0;
@@ -314,16 +330,11 @@ export async function exportStickerWithOutline(
     const scaledShadowOffset =
       scaledShadowBlur > 0 ? Math.max(4 * scale, scaledShadowBlur * 0.8) : 0;
 
-    const padding = Math.ceil(
-      Math.max(
-        scaledOutlineWidth + scaledBlurRadius * 2 + 2,
-        scaledShadowBlur + scaledShadowOffset + 2,
-      ),
-    );
+    const padding = Math.ceil(getStickerVisualPadding(outlineWidth, options) * scale);
     const w = renderedWidth + padding * 2;
     const h = renderedHeight + padding * 2;
 
-    const sourceCanvas = document.createElement("canvas");
+    const sourceCanvas = createCanvas();
     sourceCanvas.width = w;
     sourceCanvas.height = h;
     const sCtx = sourceCanvas.getContext("2d");
@@ -421,18 +432,11 @@ export async function exportStickerWithOutline(
       }
     }
 
-    const outputCanvas = document.createElement("canvas");
+    const outputCanvas = createCanvas();
     outputCanvas.width = w;
     outputCanvas.height = h;
     const oCtx = outputCanvas.getContext("2d");
     if (!oCtx) throw new Error("Export canvas unavailable");
-
-    if (scaledShadowBlur > 0) {
-      oCtx.save();
-      oCtx.filter = `drop-shadow(0 ${scaledShadowOffset}px ${scaledShadowBlur}px rgba(0,0,0,0.2))`;
-      oCtx.drawImage(sourceCanvas, 0, 0);
-      oCtx.restore();
-    }
 
     let maskCanvas: HTMLCanvasElement | null = null;
     let softenedMaskCanvas: HTMLCanvasElement | null = null;
@@ -451,7 +455,7 @@ export async function exportStickerWithOutline(
         maskPixels[p + 3] = Math.round(coverage * 255);
       }
 
-      maskCanvas = document.createElement("canvas");
+      maskCanvas = createCanvas();
       maskCanvas.width = w;
       maskCanvas.height = h;
       const maskContext = maskCanvas.getContext("2d");
@@ -459,7 +463,7 @@ export async function exportStickerWithOutline(
       maskContext.putImageData(new ImageData(maskPixels, w, h), 0, 0);
       maskPixels = new Uint8ClampedArray(0);
 
-      softenedMaskCanvas = document.createElement("canvas");
+      softenedMaskCanvas = createCanvas();
       softenedMaskCanvas.width = w;
       softenedMaskCanvas.height = h;
       const softenedContext = softenedMaskCanvas.getContext("2d");
@@ -489,7 +493,7 @@ export async function exportStickerWithOutline(
     }
 
     if (options.oilFilmEnabled && scaledOutlineWidth > 0) {
-      const holoBorder = document.createElement("canvas");
+      const holoBorder = createCanvas();
       holoBorder.width = w;
       holoBorder.height = h;
       const holoContext = holoBorder.getContext("2d");
@@ -504,7 +508,7 @@ export async function exportStickerWithOutline(
     oCtx.drawImage(sourceCanvas, 0, 0);
 
     if (options.oilFilmEnabled) {
-      const oilCanvas = document.createElement("canvas");
+      const oilCanvas = createCanvas();
       oilCanvas.width = w;
       oilCanvas.height = h;
       const oilContext = oilCanvas.getContext("2d");
@@ -518,31 +522,57 @@ export async function exportStickerWithOutline(
       oilCanvas.height = 1;
     }
 
+    // Add the shadow after composing the outline and foil. putImageData above
+    // replaces pixels, so drawing the shadow before it would erase the shadow.
+    let resultCanvas = outputCanvas;
+    let resultContext = oCtx;
+    if (scaledShadowBlur > 0) {
+      resultCanvas = createCanvas();
+      resultCanvas.width = w;
+      resultCanvas.height = h;
+      const shadowContext = resultCanvas.getContext("2d");
+      if (!shadowContext) throw new Error("Export canvas unavailable");
+      shadowContext.filter = `drop-shadow(0 ${scaledShadowOffset}px ${scaledShadowBlur}px rgba(0,0,0,0.2))`;
+      shadowContext.drawImage(outputCanvas, 0, 0);
+      shadowContext.filter = "none";
+      resultContext = shadowContext;
+    }
+
     if (opacity < 1) {
-      oCtx.save();
-      oCtx.globalCompositeOperation = "destination-in";
-      oCtx.globalAlpha = opacity;
-      oCtx.fillStyle = "#ffffff";
-      oCtx.fillRect(0, 0, w, h);
-      oCtx.restore();
+      resultContext.save();
+      resultContext.globalCompositeOperation = "destination-in";
+      resultContext.globalAlpha = opacity;
+      resultContext.fillStyle = "#ffffff";
+      resultContext.fillRect(0, 0, w, h);
+      resultContext.restore();
     }
-
-    const exportBlob = await canvasToBlob(outputCanvas);
-    if (maskCanvas) {
-      maskCanvas.width = 1;
-      maskCanvas.height = 1;
-    }
-    if (softenedMaskCanvas) {
-      softenedMaskCanvas.width = 1;
-      softenedMaskCanvas.height = 1;
-    }
-    outputCanvas.width = 1;
-    outputCanvas.height = 1;
-    sourceCanvas.width = 1;
-    sourceCanvas.height = 1;
-
-    return exportBlob;
+    retainedCanvas = resultCanvas;
+    return { canvas: resultCanvas, padding, contentWidth: renderedWidth, contentHeight: renderedHeight };
   } finally {
     URL.revokeObjectURL(url);
+    canvases.forEach((canvas) => {
+      if (canvas !== retainedCanvas) {
+        canvas.width = 1;
+        canvas.height = 1;
+      }
+    });
+  }
+}
+
+export async function exportStickerWithOutline(
+  imageBlob: Blob,
+  displayWidth: number,
+  outlineWidth: number,
+  outlineColor = "#ffffff",
+  options: StickerExportOptions = {},
+): Promise<Blob> {
+  const rendered = await renderStickerWithOutline(
+    imageBlob, displayWidth, outlineWidth, outlineColor, options,
+  );
+  try {
+    return await canvasToBlob(rendered.canvas);
+  } finally {
+    rendered.canvas.width = 1;
+    rendered.canvas.height = 1;
   }
 }

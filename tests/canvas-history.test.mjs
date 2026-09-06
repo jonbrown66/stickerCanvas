@@ -54,6 +54,58 @@ test("history branches after undo and records logical snapshots", async () => {
   URL.revokeObjectURL(second.url);
 });
 
+test("identical snapshots are ignored without discarding redo history", async () => {
+  const historyModule = await loadHistoryModule();
+  const first = sticker("first");
+  const second = sticker("second");
+  let history = historyModule.createCanvasHistory([first]);
+  history = historyModule.appendCanvasHistory(history, [first, second]);
+
+  const undo = historyModule.moveCanvasHistory(history, -1);
+  assert.ok(undo);
+  const unchanged = historyModule.appendCanvasHistory(undo.history, [first]);
+  assert.equal(unchanged, undo.history);
+  assert.ok(historyModule.moveCanvasHistory(unchanged, 1));
+
+  URL.revokeObjectURL(first.url);
+  URL.revokeObjectURL(second.url);
+});
+
+test("history comparison preserves Blob identity and compares crop values", async () => {
+  const historyModule = await loadHistoryModule();
+  const original = sticker("image", new Blob(["same"], { type: "image/png" }));
+  const equalClone = { ...original, crop: { x: 0, y: 0, width: 1, height: 1 } };
+  let history = historyModule.createCanvasHistory([equalClone]);
+
+  history = historyModule.appendCanvasHistory(history, [
+    { ...equalClone, crop: { x: 0.1, y: 0, width: 0.9, height: 1 } },
+  ]);
+  assert.equal(history.entries.length, 2);
+
+  const distinctBlob = new Blob(["same"], { type: "image/png" });
+  history = historyModule.appendCanvasHistory(history, [
+    { ...equalClone, image: distinctBlob, crop: { x: 0.1, y: 0, width: 0.9, height: 1 } },
+  ]);
+  assert.equal(history.entries.length, 3);
+
+  URL.revokeObjectURL(original.url);
+});
+
+test("history keeps the most recent thirty distinct snapshots", async () => {
+  const historyModule = await loadHistoryModule();
+  const item = sticker("limited");
+  let history = historyModule.createCanvasHistory([item]);
+  for (let x = 1; x <= 31; x += 1) {
+    history = historyModule.appendCanvasHistory(history, [{ ...item, x }]);
+  }
+
+  assert.equal(history.entries.length, 30);
+  assert.equal(history.index, 29);
+  assert.equal(history.entries[0][0].x, 2);
+
+  URL.revokeObjectURL(item.url);
+});
+
 test("restoring a deleted sticker creates a fresh readable Blob URL", async () => {
   const historyModule = await loadHistoryModule();
   const original = sticker("recoverable");

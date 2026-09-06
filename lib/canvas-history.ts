@@ -1,6 +1,7 @@
 import type {
   CanvasElement,
   CanvasElementRecord,
+  CanvasImageCrop,
   CanvasSticker,
   StickerRecord,
 } from "./canvas-types";
@@ -48,6 +49,46 @@ export function snapshotCanvasElements(
   return elements.map(toCanvasElementRecord);
 }
 
+function equalCanvasImageCrops(
+  left: CanvasImageCrop | undefined,
+  right: CanvasImageCrop | undefined,
+) {
+  return (
+    left?.x === right?.x &&
+    left?.y === right?.y &&
+    left?.width === right?.width &&
+    left?.height === right?.height
+  );
+}
+
+/** Compares logical snapshots while preserving Blob identity. */
+export function equalCanvasElementRecords(
+  left: readonly CanvasElementRecord[],
+  right: readonly CanvasElementRecord[],
+) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+
+  return left.every((leftRecord, index) => {
+    const rightRecord = right[index];
+    if (!rightRecord || leftRecord.type !== rightRecord.type) return false;
+    const leftCrop = leftRecord.type === "image" ? leftRecord.crop : undefined;
+    const rightCrop = rightRecord.type === "image" ? rightRecord.crop : undefined;
+    if (!equalCanvasImageCrops(leftCrop, rightCrop)) return false;
+
+    const leftValues = leftRecord as Record<string, unknown>;
+    const rightValues = rightRecord as Record<string, unknown>;
+    const keys = new Set([
+      ...Object.keys(leftValues),
+      ...Object.keys(rightValues),
+    ]);
+    for (const key of keys) {
+      if (key !== "crop" && leftValues[key] !== rightValues[key]) return false;
+    }
+    return true;
+  });
+}
+
 export function createCanvasHistory(
   elements: readonly (CanvasElementRecord | CanvasElement)[],
 ): CanvasHistory {
@@ -62,8 +103,12 @@ export function appendCanvasHistory(
   elements: readonly (CanvasElementRecord | CanvasElement)[],
   maximumEntries = 30,
 ): CanvasHistory {
+  const snapshot = snapshotCanvasElements(elements);
+  if (equalCanvasElementRecords(history.entries[history.index] ?? [], snapshot)) {
+    return history;
+  }
   const entries = history.entries.slice(0, history.index + 1);
-  entries.push(snapshotCanvasElements(elements));
+  entries.push(snapshot);
   if (entries.length > maximumEntries) entries.shift();
   return { entries, index: entries.length - 1 };
 }

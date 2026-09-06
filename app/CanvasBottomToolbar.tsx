@@ -1,4 +1,5 @@
 import type { CanvasTool } from "@/lib/canvas-types";
+import { getRovingFocusIndex } from "@/lib/menu-keyboard";
 import { useEffect, useRef } from "react";
 import { Icon } from "./Icon";
 
@@ -39,12 +40,28 @@ export function CanvasBottomToolbar({
   const hasOpenedMenuRef = useRef(false);
   const restoreFocusRef = useRef(false);
   const menuCallbacksRef = useRef({ onToggleShapeMenu, onToggleBackgroundMenu });
+  const menuOpenStateRef = useRef({ shape: shapeMenuOpen, background: backgroundMenuOpen });
+  const shapeTabCloseFrameRef = useRef<number | null>(null);
   const resolvedPlacement = placement === "left" ? "top" : placement;
   const menuOpen = shapeMenuOpen || backgroundMenuOpen;
 
   useEffect(() => {
     menuCallbacksRef.current = { onToggleShapeMenu, onToggleBackgroundMenu };
   }, [onToggleBackgroundMenu, onToggleShapeMenu]);
+
+  useEffect(() => {
+    menuOpenStateRef.current = { shape: shapeMenuOpen, background: backgroundMenuOpen };
+    if (!shapeMenuOpen && shapeTabCloseFrameRef.current !== null) {
+      cancelAnimationFrame(shapeTabCloseFrameRef.current);
+      shapeTabCloseFrameRef.current = null;
+    }
+  }, [backgroundMenuOpen, shapeMenuOpen]);
+
+  useEffect(() => () => {
+    if (shapeTabCloseFrameRef.current !== null) {
+      cancelAnimationFrame(shapeTabCloseFrameRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) {
@@ -81,6 +98,7 @@ export function CanvasBottomToolbar({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      event.stopPropagation();
       restoreFocusRef.current = true;
       if (shapeMenuOpen) menuCallbacksRef.current.onToggleShapeMenu();
       if (backgroundMenuOpen) menuCallbacksRef.current.onToggleBackgroundMenu?.();
@@ -98,11 +116,16 @@ export function CanvasBottomToolbar({
   useEffect(() => {
     if (!menuOpen) return;
     const frame = requestAnimationFrame(() => {
-      toolbarRef.current
-        ?.querySelector<HTMLElement>(
-          "#canvas-shape-menu button, #canvas-background-menu button, #canvas-background-menu input",
-        )
-        ?.focus();
+      const toolbar = toolbarRef.current;
+      if (!toolbar) return;
+      const focusTarget = backgroundMenuOpen
+        ? toolbar.querySelector<HTMLElement>(
+            '#canvas-background-menu [role="radio"][aria-checked="true"]:not(:disabled)',
+          ) ?? toolbar.querySelector<HTMLElement>(
+            "#canvas-background-menu button:not(:disabled), #canvas-background-menu input:not(:disabled)",
+          )
+        : toolbar.querySelector<HTMLElement>("#canvas-shape-menu button:not(:disabled)");
+      focusTarget?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [backgroundMenuOpen, menuOpen, shapeMenuOpen]);
@@ -110,6 +133,40 @@ export function CanvasBottomToolbar({
   const selectShape = (shape: CanvasShapeTool) => {
     restoreFocusRef.current = true;
     onSelectTool(shape);
+  };
+
+  const closeShapeMenuAfterTab = () => {
+    if (shapeTabCloseFrameRef.current !== null) return;
+    shapeTabCloseFrameRef.current = requestAnimationFrame(() => {
+      shapeTabCloseFrameRef.current = null;
+      if (menuOpenStateRef.current.shape) {
+        menuCallbacksRef.current.onToggleShapeMenu();
+      }
+    });
+  };
+
+  const handleShapeMenuKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const items = Array.from(
+      toolbarRef.current?.querySelectorAll<HTMLButtonElement>('#canvas-shape-menu [role="menuitemradio"]') ?? [],
+    );
+    const nextIndex = getRovingFocusIndex(
+      event.key,
+      items.indexOf(event.currentTarget),
+      items.map((item) => !item.disabled),
+    );
+    if (nextIndex !== null) {
+      event.preventDefault();
+      items[nextIndex]?.focus();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      restoreFocusRef.current = true;
+      onToggleShapeMenu();
+    } else if (event.key === "Tab") {
+      closeShapeMenuAfterTab();
+    }
   };
 
   const shapeToolActive =
@@ -127,79 +184,89 @@ export function CanvasBottomToolbar({
       }`}
       data-canvas-ui
       data-placement={resolvedPlacement}
-      aria-label="画布工具"
+      aria-label="Canvas tools"
     >
       {shapeMenuOpen ? (
         <div
           className="simple-shape-menu"
           id="canvas-shape-menu"
           role="menu"
-          aria-label="添加形状"
+          aria-label="Add shape"
         >
           <button
             type="button"
             role="menuitemradio"
+            tabIndex={-1}
             disabled={disabled}
             onClick={() => selectShape("rectangle")}
             data-active={activeTool === "rectangle"}
             aria-checked={activeTool === "rectangle"}
-            aria-label="矩形"
-            title="矩形"
+            aria-label="Rectangle"
+            title="Rectangle"
+            onKeyDown={handleShapeMenuKeyDown}
           >
             <Icon name="rectangle" />
-            <span>矩形</span>
+            <span>Rectangle</span>
           </button>
           <button
             type="button"
             role="menuitemradio"
+            tabIndex={-1}
             disabled={disabled}
             onClick={() => selectShape("ellipse")}
             data-active={activeTool === "ellipse"}
             aria-checked={activeTool === "ellipse"}
-            aria-label="椭圆"
-            title="椭圆"
+            aria-label="Ellipse"
+            title="Ellipse"
+            onKeyDown={handleShapeMenuKeyDown}
           >
             <Icon name="ellipse" />
-            <span>椭圆</span>
+            <span>Ellipse</span>
           </button>
           <button
             type="button"
             role="menuitemradio"
+            tabIndex={-1}
             disabled={disabled}
             onClick={() => selectShape("triangle")}
             data-active={activeTool === "triangle"}
             aria-checked={activeTool === "triangle"}
-            aria-label="三角形"
-            title="三角形"
+            aria-label="Triangle"
+            title="Triangle"
+            onKeyDown={handleShapeMenuKeyDown}
           >
             <Icon name="triangle" />
-            <span>三角形</span>
+            <span>Triangle</span>
           </button>
           <button
             type="button"
             role="menuitemradio"
+            tabIndex={-1}
             disabled={disabled}
             onClick={() => selectShape("diamond")}
             data-active={activeTool === "diamond"}
             aria-checked={activeTool === "diamond"}
-            aria-label="菱形"
-            title="菱形"
+            aria-label="Diamond"
+            title="Diamond"
+            onKeyDown={handleShapeMenuKeyDown}
           >
             <Icon name="diamond" />
-            <span>菱形</span>
+            <span>Diamond</span>
           </button>
           <button
             type="button"
             role="menuitemradio"
+            tabIndex={-1}
             disabled={disabled}
             onClick={() => selectShape("line")}
             data-active={activeTool === "line"}
             aria-checked={activeTool === "line"}
-            aria-label="直线"
-            title="直线"
+            aria-label="Line"
+            title="Line"
+            onKeyDown={handleShapeMenuKeyDown}
           >
             <Icon name="line" />
-            <span>直线</span>
+            <span>Line</span>
           </button>
         </div>
       ) : null}
@@ -209,32 +276,32 @@ export function CanvasBottomToolbar({
         disabled={disabled}
         onClick={() => onSelectTool("select")}
         data-active={activeTool === "select"}
-        aria-label="选择"
-        title="选择"
+        aria-label="Select"
+        title="Select"
       >
         <Icon name="cursor" />
-        <span>选择</span>
+        <span>Select</span>
       </button>
       <button
         type="button"
         disabled={disabled}
         onClick={onUpload}
-        aria-label="上传图片"
-        title="上传图片"
+        aria-label="Upload image"
+        title="Upload image"
       >
         <Icon name="image" />
-        <span>上传图片</span>
+        <span>Upload image</span>
       </button>
       <button
         type="button"
         className="simple-camera-button"
         disabled={disabled}
         onClick={onCamera}
-        aria-label="相机"
-        title="相机"
+        aria-label="Camera"
+        title="Camera"
       >
         <Icon name="camera" />
-        <span>相机</span>
+        <span>Camera</span>
       </button>
       <span className="simple-toolbar-divider" aria-hidden="true" />
       <button
@@ -242,11 +309,11 @@ export function CanvasBottomToolbar({
         disabled={disabled}
         onClick={() => onSelectTool("text")}
         data-active={activeTool === "text"}
-        aria-label="文字"
-        title="文字"
+        aria-label="Text"
+        title="Text"
       >
         <Icon name="text" />
-        <span>文字</span>
+        <span>Text</span>
       </button>
       <button
         type="button"
@@ -254,14 +321,14 @@ export function CanvasBottomToolbar({
         onClick={onToggleShapeMenu}
         data-active={shapeMenuOpen || shapeToolActive}
         data-menu-trigger="shape"
-        aria-label="形状"
-        title="形状"
+        aria-label="Shapes"
+        title="Shapes"
         aria-controls="canvas-shape-menu"
         aria-haspopup="menu"
         aria-expanded={shapeMenuOpen}
       >
         <Icon name="shapes" />
-        <span>形状</span>
+        <span>Shapes</span>
       </button>
       {onToggleBackgroundMenu ? (
         <>
@@ -272,14 +339,14 @@ export function CanvasBottomToolbar({
             onClick={onToggleBackgroundMenu}
             data-active={backgroundMenuOpen}
             data-menu-trigger="background"
-            aria-label="画布背景"
-            title="画布背景"
+            aria-label="Canvas background"
+            title="Canvas background"
             aria-controls="canvas-background-menu"
             aria-haspopup="dialog"
             aria-expanded={backgroundMenuOpen}
           >
             <Icon name="palette" />
-            <span>画布背景</span>
+            <span>Canvas background</span>
           </button>
         </>
       ) : null}

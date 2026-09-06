@@ -26,8 +26,6 @@ body {
 
 @supports (color:lab(0% 0 0)) {
   :root {
-  --holo-pointer-x: 50%;
-  --sticker-radius: 16px;
     --paper:lab(95.9914% .384897 4.96539);
     --paper-raised:lab(98.2924% .224262 3.04729);
     --ink:lab(11.826% 3.00268 8.2866);
@@ -304,8 +302,6 @@ to {
 }
 
 .simple-sticker-visual {
-  border-radius: var(--sticker-radius);
-  overflow: visible;
   pointer-events:none;
   border-radius:var(--sticker-radius);
   transform-origin:50%;
@@ -322,7 +318,6 @@ to {
 
 .simple-sticker[data-cropped="true"] .simple-sticker-visual,.simple-sticker[data-crop-mode="true"] .simple-sticker-visual {
   border-radius: var(--sticker-radius);
-  overflow: visible;
   overflow:hidden
 }
 
@@ -382,7 +377,6 @@ to {
 }
 
 .simple-sticker[data-selected="true"]:after {
-  content:"";
   content:"";
   inset:-3px;
   border:calc(1.5px * var(--simple-control-scale)) solid #5b544dcc;
@@ -820,7 +814,6 @@ to {
 .simple-floating-actions > button > span,
 .simple-shape-menu button > span {
   clip: rect(0, 0, 0, 0);
-  clip:rect(0, 0, 0, 0);
   white-space:nowrap;
   border:0;
   width:1px;
@@ -1365,7 +1358,6 @@ to {
 
 .simple-oil-spectrum {
   mix-blend-mode: color;
-  mix-blend-mode:color;
   opacity:var(--holo-foil-opacity);
   transform:translate3d(var(--holo-shift-x), var(--holo-shift-y), 0) rotate(var(--holo-tilt)) scale(1.08);
   background:radial-gradient(42% 66% at 21% 28%,#ffc25ce0,#0000 68%),radial-gradient(46% 72% at 76% 70%,#43dccbd1,#0000 70%),radial-gradient(38% 58% at 72% 18%,#cd7fff9e,#0000 66%),conic-gradient(from 218deg at 48% 52%,#ff74976b,#ffd9747a,#6ae6d075,#7cabff6b,#d78bff66,#ff74976b);
@@ -1384,7 +1376,6 @@ to {
 
 .simple-oil-streak {
   mix-blend-mode: screen;
-  mix-blend-mode:screen;
   opacity:.13;
   transform:translate3d(var(--holo-shift-x), var(--holo-shift-y), 0) rotate(var(--holo-tilt));
   background:linear-gradient(116deg,#0000 0 42%,#ffb1de0f 45%,#ffefbe29 47.6%,#fffff8b8 49.35%,#ffffffeb 50%,#c5efff4d 51.1%,#91c8ff14 53.4%,#0000 57% 100%);
@@ -1657,7 +1648,6 @@ to {
 }
 
 .simple-left-toolbar .simple-shape-menu {
-  grid-template-columns: repeat(5, 42px);
   grid-template-columns:38px;
   animation-name:simple-left-tool-menu-enter;
   inset:50% auto auto calc(100% + 10px);
@@ -1717,16 +1707,13 @@ to {
 }
 
 @media (pointer: coarse) {
-  .simple-canvas-zoom-controls button:before {
-    content: "";
-    width: 100%;
-    min-width: 44px;
-    height: 100%;
-    min-height: 44px;
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
+  .simple-canvas-zoom-controls {
+    gap: 4px;
+  }
+
+  .simple-canvas-zoom-controls button {
+    width: 44px;
+    height: 44px;
   }
 }
 
@@ -2181,7 +2168,6 @@ to {
 }
 
 .canvas-properties-icon-button[data-active="true"] {
-  background: var(--accent);
   background:var(--accent);
   color:var(--ink);
   box-shadow:inset 0 0 0 1px color-mix(in oklch, var(--accent) 68%, var(--ink))
@@ -2214,7 +2200,6 @@ to {
 }
 
 .canvas-style-color input[type="color"] {
-  opacity: 0;
   opacity:0;
   width:100%;
   height:100%;
@@ -2227,7 +2212,6 @@ to {
 }
 
 .canvas-style-color-dot {
-  border-radius: 50%;
   border:1.5px solid var(--paper-raised);
   pointer-events:none;
   border-radius:50%;
@@ -2252,7 +2236,6 @@ to {
 }
 
 .canvas-properties-panel .canvas-style-color>.canvas-style-color-dot {
-  border-radius: 50%;
   border-radius:50%;
   inset:10px
 }
@@ -2575,7 +2558,7 @@ input,textarea {
 }
 
 
-/* ── 贴纸控制句柄：顶部旋转按钮，无背景 ── */
+/* ── Sticker controls: a background-free rotation button at the top ── */
 .simple-sticker-rotate {
   position: absolute;
   top: calc(-34px * var(--simple-control-scale, 1));
@@ -2625,7 +2608,7 @@ input,textarea {
   transform: translateX(-50%) scale(0.92);
 }
 
-/* ── 画布背景快捷气泡 (Canvas Background Menu) ── */
+/* ── Canvas background quick menu ── */
 .canvas-background-menu {
   position: absolute;
   bottom: calc(100% + 12px);

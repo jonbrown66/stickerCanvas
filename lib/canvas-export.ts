@@ -5,7 +5,7 @@ import type {
   CanvasSticker,
   CanvasTextElement,
 } from "./canvas-types";
-import { renderStaticHoloBorder, renderStaticOilFilm } from "./oil-film-render";
+import { getStickerVisualPadding, renderStickerWithOutline } from "./sticker-image-processing";
 
 const PAPER_COLOR = "#f6f1e7";
 const DOT_COLOR = "rgba(116, 108, 95, 0.18)";
@@ -35,15 +35,14 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 function getImagePadding(element: CanvasSticker) {
-  const outline = element.outlineWidth ?? 0;
-  if (outline <= 0) return 0;
-  return outline + Math.max(2.4, outline * 0.35) * 2 + 3;
+  return getStickerVisualPadding(element.outlineWidth ?? 0, element);
 }
 
 function getVisualPadding(element: CanvasElement) {
   if (element.type === "image") return getImagePadding(element);
   if (element.type === "shape") return element.strokeWidth / 2 + 2;
-  return element.textOutlineWidth > 0 ? element.textOutlineWidth / 2 + 2 : 0;
+  return Math.max(element.borderWidth / 2,
+    element.textOutlineWidth > 0 ? element.textOutlineWidth * 1.8 + 4 : 0);
 }
 
 function includeRotatedElement(bounds: Bounds, element: CanvasElement) {
@@ -176,28 +175,6 @@ function drawPaperBackground(
     }
     context.stroke();
   }
-}
-
-type DecodedImage = {
-  image: HTMLImageElement;
-  url: string;
-};
-
-async function decodeBlob(blob: Blob): Promise<DecodedImage> {
-  const url = URL.createObjectURL(blob);
-  try {
-    const image = new Image();
-    image.src = url;
-    await image.decode();
-    return { image, url };
-  } catch (error) {
-    URL.revokeObjectURL(url);
-    throw error;
-  }
-}
-
-function closeDecodedImage(decoded: DecodedImage) {
-  URL.revokeObjectURL(decoded.url);
 }
 
 function roundedRect(
@@ -371,86 +348,27 @@ async function drawImageElement(
   element: CanvasSticker,
   scale: number,
 ) {
-  const decoded = await decodeBlob(element.image);
+  const rendered = await renderStickerWithOutline(
+    element.image,
+    element.width,
+    element.outlineWidth ?? 0,
+    element.outlineColor || "#ffffff",
+    { ...element, opacity: 1 },
+    { width: element.width * scale, height: element.height * scale },
+  );
   try {
-    const { image } = decoded;
-    const padding = getImagePadding(element);
-    if (padding > 0) {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.ceil((element.width + padding * 2) * scale));
-      canvas.height = Math.max(1, Math.ceil((element.height + padding * 2) * scale));
-      const itemContext = canvas.getContext("2d");
-      if (!itemContext) throw new Error("Canvas export unavailable");
-      const mask = document.createElement("canvas");
-      mask.width = canvas.width;
-      mask.height = canvas.height;
-      const maskContext = mask.getContext("2d");
-      if (!maskContext) throw new Error("Canvas export unavailable");
-      maskContext.drawImage(
-        image,
-        padding * scale,
-        padding * scale,
-        element.width * scale,
-        element.height * scale,
-      );
-      const outline = document.createElement("canvas");
-      outline.width = canvas.width;
-      outline.height = canvas.height;
-      const outlineContext = outline.getContext("2d");
-      if (!outlineContext) throw new Error("Canvas export unavailable");
-      outlineContext.filter = `blur(${Math.max(0.75, (element.outlineWidth ?? 0) * 0.35) * scale}px)`;
-      for (let angle = 0; angle < 360; angle += 20) {
-        const radians = (angle * Math.PI) / 180;
-        outlineContext.drawImage(
-          mask,
-          Math.cos(radians) * (element.outlineWidth ?? 0) * scale,
-          Math.sin(radians) * (element.outlineWidth ?? 0) * scale,
-        );
-      }
-      outlineContext.filter = "none";
-      outlineContext.globalCompositeOperation = "source-in";
-      outlineContext.fillStyle = element.outlineColor || "#ffffff";
-      outlineContext.fillRect(0, 0, outline.width, outline.height);
-      itemContext.drawImage(outline, 0, 0);
-      if (element.oilFilmEnabled) {
-        const holoBorder = document.createElement("canvas");
-        holoBorder.width = canvas.width;
-        holoBorder.height = canvas.height;
-        const holoContext = holoBorder.getContext("2d");
-        if (!holoContext) throw new Error("Canvas export unavailable");
-        holoContext.drawImage(outline, 0, 0);
-        renderStaticHoloBorder(holoContext, holoBorder.width, holoBorder.height);
-        itemContext.drawImage(holoBorder, 0, 0);
-        holoBorder.width = 1;
-        holoBorder.height = 1;
-      }
-      itemContext.drawImage(mask, 0, 0);
-      if (element.oilFilmEnabled) {
-        const oilCanvas = document.createElement("canvas");
-        oilCanvas.width = canvas.width;
-        oilCanvas.height = canvas.height;
-        const oilContext = oilCanvas.getContext("2d");
-        if (!oilContext) throw new Error("Canvas export unavailable");
-        oilContext.drawImage(mask, 0, 0);
-        renderStaticOilFilm(oilContext, oilCanvas.width, oilCanvas.height);
-        oilContext.globalCompositeOperation = "destination-in";
-        oilContext.drawImage(mask, 0, 0);
-        itemContext.drawImage(oilCanvas, 0, 0);
-        oilCanvas.width = 1;
-        oilCanvas.height = 1;
-      }
-      context.drawImage(canvas, -padding * scale, -padding * scale);
-      mask.width = 1;
-      mask.height = 1;
-      outline.width = 1;
-      outline.height = 1;
-      canvas.width = 1;
-      canvas.height = 1;
-      return;
-    }
-    context.drawImage(image, 0, 0, element.width * scale, element.height * scale);
+    const scaleX = element.width * scale / rendered.contentWidth;
+    const scaleY = element.height * scale / rendered.contentHeight;
+    context.drawImage(
+      rendered.canvas,
+      -rendered.padding * scaleX,
+      -rendered.padding * scaleY,
+      rendered.canvas.width * scaleX,
+      rendered.canvas.height * scaleY,
+    );
   } finally {
-    closeDecodedImage(decoded);
+    rendered.canvas.width = 1;
+    rendered.canvas.height = 1;
   }
 }
 
@@ -460,18 +378,42 @@ async function drawElement(
   bounds: Bounds,
   scale: number,
 ) {
+  const opacity = Math.max(0, Math.min(1, element.opacity ?? 1));
+  if (opacity === 0) return;
   context.save();
   context.translate((element.x - bounds.left) * scale, (element.y - bounds.top) * scale);
   context.rotate((element.rotation * Math.PI) / 180);
   context.translate((-element.width / 2) * scale, (-element.height / 2) * scale);
-  if (element.type === "image") {
-    await drawImageElement(context, element, scale);
-  } else if (element.type === "text") {
-    drawTextElement(context, element, scale);
-  } else {
-    drawShapeElement(context, element, scale);
+  let layer: HTMLCanvasElement | null = null;
+  try {
+    context.globalAlpha = opacity;
+    if (element.type === "image") {
+      await drawImageElement(context, element, scale);
+    } else if (opacity < 1) {
+      // Apply opacity once to the whole element, including overlapping fill,
+      // stroke and foil, just like the preview's element opacity.
+      const padding = Math.ceil(getVisualPadding(element) * scale);
+      layer = document.createElement("canvas");
+      layer.width = Math.max(1, Math.ceil(element.width * scale) + padding * 2);
+      layer.height = Math.max(1, Math.ceil(element.height * scale) + padding * 2);
+      const layerContext = layer.getContext("2d");
+      if (!layerContext) throw new Error("Canvas export unavailable");
+      layerContext.translate(padding, padding);
+      if (element.type === "text") drawTextElement(layerContext, element, scale);
+      else drawShapeElement(layerContext, element, scale);
+      context.drawImage(layer, -padding, -padding);
+    } else if (element.type === "text") {
+      drawTextElement(context, element, scale);
+    } else {
+      drawShapeElement(context, element, scale);
+    }
+  } finally {
+    if (layer) {
+      layer.width = 1;
+      layer.height = 1;
+    }
+    context.restore();
   }
-  context.restore();
 }
 
 export async function exportCanvasToPng(
@@ -488,16 +430,19 @@ export async function exportCanvasToPng(
   canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas export unavailable");
-  if (background) {
-    drawPaperBackground(context, bounds, scale, background);
-  } else {
-    drawPaperBackground(context, bounds, scale);
+  try {
+    if (background) {
+      drawPaperBackground(context, bounds, scale, background);
+    } else {
+      drawPaperBackground(context, bounds, scale);
+    }
+    for (const element of ordered) {
+      await drawElement(context, element, bounds, scale);
+    }
+    const blob = await canvasToBlob(canvas);
+    return { blob, width, height, scale };
+  } finally {
+    canvas.width = 1;
+    canvas.height = 1;
   }
-  for (const element of ordered) {
-    await drawElement(context, element, bounds, scale);
-  }
-  const blob = await canvasToBlob(canvas);
-  canvas.width = 1;
-  canvas.height = 1;
-  return { blob, width, height, scale };
 }

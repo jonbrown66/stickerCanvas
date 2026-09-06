@@ -1,11 +1,13 @@
 import {
   useState,
+  useLayoutEffect,
+  useRef,
   type ComponentProps,
   type CSSProperties,
   type PointerEvent,
-  type SyntheticEvent,
   type TouchEvent,
 } from "react";
+import { createStyleCommitBoundary } from "@/lib/style-commit";
 import type {
   CanvasElement,
   CanvasTextElement,
@@ -116,6 +118,7 @@ function PanelIconButton({
 }
 
 interface PanelRangeProps {
+  scope: string;
   icon: IconName;
   label: string;
   value: number;
@@ -128,6 +131,7 @@ interface PanelRangeProps {
 }
 
 function PanelRange({
+  scope,
   icon,
   label,
   value,
@@ -138,8 +142,12 @@ function PanelRange({
   formatValue = (current) => String(current),
   onChange,
 }: PanelRangeProps) {
-  const commit = (event: SyntheticEvent<HTMLInputElement>) =>
-    onChange(Number(event.currentTarget.value), true);
+  const boundaryRef = useRef(createStyleCommitBoundary<number>());
+  useLayoutEffect(() => {
+    boundaryRef.current.syncScope(scope);
+  }, [scope]);
+  const commit = () =>
+    boundaryRef.current.commit(scope, (nextValue) => onChange(nextValue, true));
   const progress =
     ((clamp(value, min, max) - min) / Math.max(1, max - min)) * 100;
   const rangeStyle = {
@@ -165,11 +173,14 @@ function PanelRange({
         aria-label={label}
         style={rangeStyle}
         onChange={(event) =>
-          onChange(Number(event.currentTarget.value), false)
+          boundaryRef.current.preview(scope, Number(event.currentTarget.value), (nextValue) =>
+            onChange(nextValue, false),
+          )
         }
         onPointerUp={commit}
         onKeyUp={commit}
         onBlur={commit}
+        onPointerCancel={commit}
       />
     </label>
   );
@@ -193,6 +204,10 @@ export function CanvasInspector({
   onToggleCrop,
   onToggleCutout,
 }: CanvasInspectorProps) {
+  const opacityBoundaryRef = useRef(createStyleCommitBoundary<number>());
+  useLayoutEffect(() => {
+    opacityBoundaryRef.current.syncScope(element.id);
+  }, [element.id]);
   const [activeFlyout, setActiveFlyout] = useState<PanelFlyout>(null);
   const image = element.type === "image" ? element : null;
   const text = element.type === "text" ? element : null;
@@ -271,7 +286,7 @@ export function CanvasInspector({
       className="canvas-properties-panel"
       data-canvas-ui
       data-element-type={element.type}
-      aria-label="元素属性"
+      aria-label="Element properties"
       aria-busy={processing}
       onPointerDown={stopEvent}
       onTouchStart={stopEvent}
@@ -279,12 +294,12 @@ export function CanvasInspector({
       {image || text ? (
         <section className="canvas-properties-section" aria-labelledby="properties-corners">
           <div className="canvas-properties-section-heading">
-            <h2 id="properties-corners">边角</h2>
+            <h2 id="properties-corners">Corners</h2>
             <button
               type="button"
               className="canvas-properties-panel-close"
-              aria-label="关闭属性"
-              title="关闭"
+              aria-label="Close properties"
+              title="Close"
               onClick={onClose}
             >
               <Icon name="close" />
@@ -293,7 +308,7 @@ export function CanvasInspector({
           <div className="canvas-properties-button-row canvas-properties-corner-row">
             <PanelIconButton
               icon="corners-square"
-              label="直角"
+              label="Square corners"
               active={!roundedCorners}
               disabled={disabled}
               onClick={() =>
@@ -307,7 +322,7 @@ export function CanvasInspector({
             />
             <PanelIconButton
               icon="corners"
-              label="圆角"
+              label="Rounded corners"
               active={roundedCorners}
               disabled={disabled}
               onClick={() =>
@@ -324,8 +339,9 @@ export function CanvasInspector({
             />
           </div>
           <PanelRange
+            scope={element.id}
             icon="corners"
-            label="圆角大小"
+            label="Corner radius"
             value={cornerRadius}
             min={0}
             max={image ? MAX_STICKER_CORNER_RADIUS : 80}
@@ -337,13 +353,13 @@ export function CanvasInspector({
 
       <section className="canvas-properties-section" aria-labelledby="properties-opacity">
         <div className="canvas-properties-section-heading">
-          <h2 id="properties-opacity">透明度</h2>
+          <h2 id="properties-opacity">Opacity</h2>
           {shape ? (
             <button
               type="button"
               className="canvas-properties-panel-close"
-              aria-label="关闭属性"
-              title="关闭"
+              aria-label="Close properties"
+              title="Close"
               onClick={onClose}
             >
               <Icon name="close" />
@@ -358,19 +374,34 @@ export function CanvasInspector({
             step={1}
             value={opacityPercent}
             disabled={disabled}
-            aria-label="透明度"
+            aria-label="Opacity"
             style={{ "--range-progress": `${opacityPercent}%` } as CSSProperties}
             onChange={(event) =>
-              updateOpacity(Number(event.currentTarget.value), false)
+              opacityBoundaryRef.current.preview(
+                element.id,
+                Number(event.currentTarget.value),
+                (nextValue) => updateOpacity(nextValue, false),
+              )
             }
-            onPointerUp={(event) =>
-              updateOpacity(Number(event.currentTarget.value), true)
+            onPointerUp={() =>
+              opacityBoundaryRef.current.commit(element.id, (nextValue) =>
+                updateOpacity(nextValue, true),
+              )
             }
-            onKeyUp={(event) =>
-              updateOpacity(Number(event.currentTarget.value), true)
+            onKeyUp={() =>
+              opacityBoundaryRef.current.commit(element.id, (nextValue) =>
+                updateOpacity(nextValue, true),
+              )
             }
-            onBlur={(event) =>
-              updateOpacity(Number(event.currentTarget.value), true)
+            onBlur={() =>
+              opacityBoundaryRef.current.commit(element.id, (nextValue) =>
+                updateOpacity(nextValue, true),
+              )
+            }
+            onPointerCancel={() =>
+              opacityBoundaryRef.current.commit(element.id, (nextValue) =>
+                updateOpacity(nextValue, true),
+              )
             }
           />
           <span className="canvas-properties-opacity-values">
@@ -383,14 +414,14 @@ export function CanvasInspector({
 
       <section className="canvas-properties-section" aria-labelledby="properties-style">
         <div className="canvas-properties-section-heading">
-          <h2 id="properties-style">样式</h2>
+          <h2 id="properties-style">Style</h2>
         </div>
         <div className="canvas-properties-button-row canvas-properties-style-row">
           {image ? (
             <>
               <PanelIconButton
                 icon="sparkles"
-                label={image.oilFilmEnabled ? "关闭全息" : "开启全息"}
+                label={image.oilFilmEnabled ? "Disable Holo" : "Enable Holo"}
                 active={Boolean(image.oilFilmEnabled)}
                 disabled={disabled}
                 onClick={() =>
@@ -402,14 +433,14 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="scissors"
-                label={cropping ? "完成裁剪" : "裁剪图片"}
+                label={cropping ? "Finish crop" : "Crop image"}
                 active={cropping}
                 disabled={disabled}
                 onClick={() => onToggleCrop?.()}
               />
               <PanelIconButton
                 icon="shadow"
-                label={image.shadowEnabled === false ? "开启阴影" : "关闭阴影"}
+                label={image.shadowEnabled === false ? "Enable shadow" : "Disable shadow"}
                 active={image.shadowEnabled !== false}
                 disabled={disabled}
                 onClick={() =>
@@ -421,7 +452,7 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="stroke"
-                label={image.outlineWidth ? "移除描边" : "添加描边"}
+                label={image.outlineWidth ? "Remove outline" : "Add outline"}
                 active={Boolean(image.outlineWidth)}
                 disabled={disabled}
                 onClick={() =>
@@ -432,7 +463,8 @@ export function CanvasInspector({
                 }
               />
               <CanvasColorInput
-                label="描边颜色"
+                scope={element.id}
+                label="Outline color"
                 value={image.outlineColor || "#ffffff"}
                 disabled={disabled || !(image.outlineWidth ?? 0)}
                 onChange={(color, commit) =>
@@ -441,7 +473,7 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="sliders"
-                label="图片样式"
+                label="Image style"
                 active={activeFlyout === "image-style"}
                 expanded={activeFlyout === "image-style"}
                 disabled={disabled}
@@ -452,7 +484,7 @@ export function CanvasInspector({
             <>
               <PanelIconButton
                 icon="font"
-                label="字号"
+                label="Font size"
                 active={activeFlyout === "font-size"}
                 expanded={activeFlyout === "font-size"}
                 disabled={disabled}
@@ -460,7 +492,7 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="bold"
-                label="粗体"
+                label="Bold"
                 active={text.fontWeight >= 600}
                 disabled={disabled}
                 onClick={() =>
@@ -472,7 +504,7 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon={`align-${text.textAlign}` as IconName}
-                label={`文字对齐：${text.textAlign}`}
+                label={`Text alignment: ${text.textAlign}`}
                 disabled={disabled}
                 onClick={() => {
                   const textAlign =
@@ -485,7 +517,8 @@ export function CanvasInspector({
                 }}
               />
               <CanvasColorInput
-                label="文字颜色"
+                scope={element.id}
+                label="Text color"
                 value={text.color}
                 disabled={disabled}
                 onChange={(color, commit) =>
@@ -494,8 +527,8 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="text-outline"
-                label={text.textOutlineWidth ? "移除文字描边" : "添加文字描边"}
-                title="文字描边"
+                label={text.textOutlineWidth ? "Remove text outline" : "Add text outline"}
+                title="Text outline"
                 active={text.textOutlineWidth > 0}
                 disabled={disabled}
                 onClick={() =>
@@ -511,7 +544,8 @@ export function CanvasInspector({
               />
               {text.textOutlineWidth > 0 ? (
                 <CanvasColorInput
-                  label="文字描边颜色"
+                  scope={element.id}
+                  label="Text outline color"
                   value={text.textOutlineColor}
                   disabled={disabled}
                   onChange={(color, commit) =>
@@ -521,8 +555,8 @@ export function CanvasInspector({
               ) : null}
               <PanelIconButton
                 icon="stroke-width"
-                label="文字描边粗细"
-                title="文字描边粗细"
+                label="Text outline width"
+                title="Text outline width"
                 active={activeFlyout === "text-outline-width"}
                 expanded={activeFlyout === "text-outline-width"}
                 disabled={disabled}
@@ -530,8 +564,8 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="sparkles"
-                label={text.holoEnabled ? "关闭全息" : "开启全息"}
-                title="全息效果"
+                label={text.holoEnabled ? "Disable Holo" : "Enable Holo"}
+                title="Holo effect"
                 active={text.holoEnabled}
                 disabled={disabled}
                 onClick={() =>
@@ -540,8 +574,8 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="fill"
-                label={backgroundEnabled ? "移除背景" : "添加背景"}
-                title="背景填充"
+                label={backgroundEnabled ? "Remove background" : "Add background"}
+                title="Background fill"
                 active={backgroundEnabled}
                 disabled={disabled}
                 onClick={() =>
@@ -557,7 +591,8 @@ export function CanvasInspector({
               />
               {backgroundEnabled ? (
                 <CanvasColorInput
-                  label="背景颜色"
+                  scope={element.id}
+                  label="Background color"
                   value={backgroundColor}
                   disabled={disabled}
                   onChange={(color, commit) =>
@@ -567,8 +602,8 @@ export function CanvasInspector({
               ) : null}
               <PanelIconButton
                 icon="border"
-                label={borderEnabled ? "移除边框" : "添加边框"}
-                title="边框"
+                label={borderEnabled ? "Remove border" : "Add border"}
+                title="Border"
                 active={borderEnabled}
                 disabled={disabled}
                 onClick={() =>
@@ -577,7 +612,8 @@ export function CanvasInspector({
               />
               {borderEnabled ? (
                 <CanvasColorInput
-                  label="边框颜色"
+                  scope={element.id}
+                  label="Border color"
                   value={text.borderColor}
                   disabled={disabled}
                   onChange={(color, commit) =>
@@ -587,8 +623,8 @@ export function CanvasInspector({
               ) : null}
               <PanelIconButton
                 icon="sliders"
-                label="边框粗细"
-                title="边框粗细"
+                label="Border width"
+                title="Border width"
                 active={activeFlyout === "border-width"}
                 expanded={activeFlyout === "border-width"}
                 disabled={disabled}
@@ -599,7 +635,7 @@ export function CanvasInspector({
             <>
               <PanelIconButton
                 icon="fill"
-                label={shape.fillEnabled ? "移除填充" : "添加填充"}
+                label={shape.fillEnabled ? "Remove fill" : "Add fill"}
                 active={shape.fillEnabled}
                 disabled={disabled}
                 onClick={() =>
@@ -608,7 +644,8 @@ export function CanvasInspector({
               />
               {shape.fillEnabled ? (
                 <CanvasColorInput
-                  label="填充颜色"
+                  scope={element.id}
+                  label="Fill color"
                   value={shape.fillColor}
                   disabled={disabled}
                   onChange={(color, commit) =>
@@ -618,8 +655,8 @@ export function CanvasInspector({
               ) : null}
               <PanelIconButton
                 icon="border"
-                label={shape.strokeWidth ? "移除描边" : "添加描边"}
-                title="描边"
+                label={shape.strokeWidth ? "Remove outline" : "Add outline"}
+                title="Outline"
                 active={shape.strokeWidth > 0}
                 disabled={disabled}
                 onClick={() =>
@@ -630,7 +667,8 @@ export function CanvasInspector({
                 }
               />
               <CanvasColorInput
-                label="描边颜色"
+                scope={element.id}
+                label="Outline color"
                 value={shape.strokeColor}
                 disabled={disabled || shape.strokeWidth <= 0}
                 onChange={(color, commit) =>
@@ -639,8 +677,8 @@ export function CanvasInspector({
               />
               <PanelIconButton
                 icon="stroke-width"
-                label="描边粗细"
-                title="描边粗细"
+                label="Outline width"
+                title="Outline width"
                 active={activeFlyout === "border-width"}
                 expanded={activeFlyout === "border-width"}
                 disabled={disabled}
@@ -651,10 +689,11 @@ export function CanvasInspector({
         </div>
 
         {image && activeFlyout === "image-style" ? (
-          <div className="canvas-properties-flyout" role="group" aria-label="图片样式控件">
+          <div className="canvas-properties-flyout" role="group" aria-label="Image style controls">
             <PanelRange
+              scope={element.id}
               icon="stroke"
-              label="描边"
+              label="Outline"
               value={image.outlineWidth ?? 0}
               min={0}
               max={24}
@@ -664,8 +703,9 @@ export function CanvasInspector({
               }
             />
             <PanelRange
+              scope={element.id}
               icon="shadow"
-              label="阴影大小"
+              label="Shadow size"
               value={image.shadowBlur ?? DEFAULT_STICKER_SHADOW_BLUR}
               min={0}
               max={MAX_STICKER_SHADOW_BLUR}
@@ -678,10 +718,11 @@ export function CanvasInspector({
         ) : null}
 
         {text && activeFlyout === "font-size" ? (
-          <div className="canvas-properties-flyout" role="group" aria-label="字号控件">
+          <div className="canvas-properties-flyout" role="group" aria-label="Font size controls">
             <PanelRange
+              scope={element.id}
               icon="font"
-              label="字号"
+              label="Font size"
               value={text.fontSize}
               min={12}
               max={96}
@@ -694,10 +735,11 @@ export function CanvasInspector({
         ) : null}
 
         {text && activeFlyout === "text-outline-width" ? (
-          <div className="canvas-properties-flyout" role="group" aria-label="文字描边粗细控件">
+          <div className="canvas-properties-flyout" role="group" aria-label="Text outline width controls">
             <PanelRange
+              scope={element.id}
               icon="text-outline"
-              label="描边"
+              label="Outline"
               value={text.textOutlineWidth}
               min={0}
               max={48}
@@ -709,10 +751,11 @@ export function CanvasInspector({
         ) : null}
 
         {(text || shape) && activeFlyout === "border-width" ? (
-          <div className="canvas-properties-flyout" role="group" aria-label="边框粗细控件">
+          <div className="canvas-properties-flyout" role="group" aria-label="Border width controls">
             <PanelRange
+              scope={element.id}
               icon="border"
-              label={text ? "边框" : "描边"}
+              label={text ? "Border" : "Outline"}
               value={text ? text.borderWidth : shape?.strokeWidth ?? 0}
               min={0}
               max={16}
@@ -724,37 +767,37 @@ export function CanvasInspector({
       </section>
 
       <details className="canvas-properties-advanced">
-        <summary>更多操作</summary>
+        <summary>More actions</summary>
         <section className="canvas-properties-section" aria-labelledby="properties-layer">
           <div className="canvas-properties-section-heading">
-            <h2 id="properties-layer">图层</h2>
+            <h2 id="properties-layer">Layers</h2>
           </div>
           <div className="canvas-properties-button-row canvas-properties-layer-row">
             <PanelIconButton
               icon="layer-send-back"
-              label="置于底层"
-              title="置于底层"
+              label="Send to back"
+              title="Send to back"
               disabled={disabled}
               onClick={() => onLayerChange("send-back")}
             />
             <PanelIconButton
               icon="layer-back"
-              label="下移一层"
-              title="下移一层"
+              label="Send backward"
+              title="Send backward"
               disabled={disabled}
               onClick={() => onLayerChange("backward")}
             />
             <PanelIconButton
               icon="layer-forward"
-              label="上移一层"
-              title="上移一层"
+              label="Bring forward"
+              title="Bring forward"
               disabled={disabled}
               onClick={() => onLayerChange("forward")}
             />
             <PanelIconButton
               icon="layer-front"
-              label="置于顶层"
-              title="置于顶层"
+              label="Bring to front"
+              title="Bring to front"
               disabled={disabled}
               onClick={() => onLayerChange("bring-front")}
             />
@@ -763,20 +806,20 @@ export function CanvasInspector({
 
         <section className="canvas-properties-section" aria-labelledby="properties-actions">
           <div className="canvas-properties-section-heading">
-            <h2 id="properties-actions">操作</h2>
+            <h2 id="properties-actions">Actions</h2>
           </div>
           <div className="canvas-properties-button-row canvas-properties-action-row">
             <PanelIconButton
               icon="copy"
-              label="复制"
-              title="复制"
+              label="Duplicate"
+              title="Duplicate"
               disabled={disabled}
               onClick={onDuplicate}
             />
             <PanelIconButton
               icon="trash"
-              label="删除"
-              title="删除"
+              label="Delete"
+              title="Delete"
               danger
               disabled={disabled}
               onClick={onDelete}
@@ -784,7 +827,7 @@ export function CanvasInspector({
             {image && onToggleCutout ? (
               <PanelIconButton
                 icon="eraser"
-                label={image.isCutout ? "恢复背景" : "移除背景"}
+                label={image.isCutout ? "Restore background" : "Remove background"}
                 active={Boolean(image.isCutout)}
                 disabled={
                   disabled || Boolean(image.isCutout && !image.originalImage)
@@ -795,7 +838,7 @@ export function CanvasInspector({
             {image && onDownload ? (
               <PanelIconButton
                 icon="download"
-                label="保存 PNG"
+                label="Save PNG"
                 disabled={disabled}
                 onClick={onDownload}
               />

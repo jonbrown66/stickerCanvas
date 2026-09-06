@@ -29,6 +29,7 @@ type PendingRequest = {
   resolve: (result: BackgroundRemovalResult) => void;
   reject: (error: Error) => void;
   onProgress?: (progress: BackgroundRemovalProgress) => void;
+  cleanup: () => void;
 };
 
 let worker: Worker | null = null;
@@ -60,9 +61,16 @@ function getWorker() {
       return;
     }
     pending.delete(response.id);
+    request.cleanup();
     if (response.type === "error") {
       resetWorker();
-      request.reject(new Error(response.message));
+      const error = new Error(response.message);
+      request.reject(error);
+      for (const other of pending.values()) {
+        other.cleanup();
+        other.reject(error);
+      }
+      pending.clear();
       return;
     }
     try {
@@ -80,7 +88,10 @@ function getWorker() {
   });
   worker.addEventListener("error", (event) => {
     const error = new Error(event.message || "Background removal worker failed");
-    for (const request of pending.values()) request.reject(error);
+    for (const request of pending.values()) {
+      request.cleanup();
+      request.reject(error);
+    }
     pending.clear();
     resetWorker();
   });
@@ -104,13 +115,18 @@ async function normalizeImageSource(source: string | Blob) {
     element.decoding = "async";
     const temporaryUrl =
       source instanceof Blob ? URL.createObjectURL(source) : null;
-    await new Promise<void>((resolve, reject) => {
-      element.onload = () => resolve();
-      element.onerror = () =>
-        reject(new Error("The source image could not be decoded"));
-      element.src =
-        typeof source === "string" ? source : (temporaryUrl as string);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        element.onload = () => resolve();
+        element.onerror = () =>
+          reject(new Error("The source image could not be decoded"));
+        element.src =
+          typeof source === "string" ? source : (temporaryUrl as string);
+      });
+    } catch (error) {
+      if (temporaryUrl) URL.revokeObjectURL(temporaryUrl);
+      throw error;
+    }
     image = element;
     naturalWidth = element.naturalWidth || element.width;
     naturalHeight = element.naturalHeight || element.height;
@@ -153,15 +169,34 @@ async function normalizeImageSource(source: string | Blob) {
 export async function removeImageBackground(
   source: string | Blob,
   onProgress?: (progress: BackgroundRemovalProgress) => void,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   const blob = await normalizeImageSource(source);
   const image = await blob.arrayBuffer();
+  signal?.throwIfAborted();
   const id = ++requestId;
   return new Promise<BackgroundRemovalResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject, onProgress });
-    getWorker().postMessage(
-      { type: "remove", id, image, mimeType: blob.type || "image/png" },
-      [image],
-    );
+    const abort = () => {
+      resetWorker();
+      for (const request of pending.values()) {
+        request.cleanup();
+        request.reject(new DOMException("Background removal canceled", "AbortError"));
+      }
+      pending.clear();
+    };
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    pending.set(id, { resolve, reject, onProgress, cleanup });
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      getWorker().postMessage(
+        { type: "remove", id, image, mimeType: blob.type || "image/png" },
+        [image],
+      );
+    } catch (error) {
+      pending.delete(id);
+      cleanup();
+      reject(error);
+    }
   });
 }

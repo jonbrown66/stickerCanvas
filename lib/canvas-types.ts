@@ -162,19 +162,19 @@ export const DEFAULT_CANVAS_BACKGROUND: CanvasBackgroundConfig = {
 };
 
 export const CANVAS_BG_PRESETS = [
-  { label: "暖纸", color: "#f7f3ea" },
-  { label: "冷灰", color: "#f1f3f5" },
-  { label: "纯白", color: "#ffffff" },
-  { label: "暗夜", color: "#18181b" },
-  { label: "蜜桃", color: "#fdf2f4" },
-  { label: "抹茶", color: "#f0f7ed" },
-  { label: "雾蓝", color: "#edf4fa" },
+  { label: "Warm Paper", color: "#f7f3ea" },
+  { label: "Cool Gray", color: "#f1f3f5" },
+  { label: "Pure White", color: "#ffffff" },
+  { label: "Midnight", color: "#18181b" },
+  { label: "Peach", color: "#fdf2f4" },
+  { label: "Matcha", color: "#f0f7ed" },
+  { label: "Misty Blue", color: "#edf4fa" },
 ];
 
 export const CANVAS_BG_STYLES: { id: CanvasBackgroundStyle; label: string }[] = [
-  { id: "dots", label: "点阵" },
-  { id: "grid", label: "方格" },
-  { id: "lines", label: "横线" },
-  { id: "solid", label: "纯色" },
-  { id: "transparent", label: "透明" },
+  { id: "dots", label: "Dots" },
+  { id: "grid", label: "Grid" },
+  { id: "lines", label: "Lines" },
+  { id: "solid", label: "Solid" },
+  { id: "transparent", label: "Transparent" },
 ];

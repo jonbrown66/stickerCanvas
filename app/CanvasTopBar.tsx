@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getRovingFocusIndex } from "@/lib/menu-keyboard";
 import { Icon } from "./Icon";
 
 interface CanvasTopBarProps {
@@ -30,9 +31,29 @@ export function CanvasTopBar({
   const menuRef = useRef<HTMLDivElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusRef = useRef(false);
+  const tabCloseFrameRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (tabCloseFrameRef.current !== null) {
+      cancelAnimationFrame(tabCloseFrameRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen && tabCloseFrameRef.current !== null) {
+      cancelAnimationFrame(tabCloseFrameRef.current);
+      tabCloseFrameRef.current = null;
+    }
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
+
+    const frame = requestAnimationFrame(() => {
+      menuRef.current
+        ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+        ?.focus();
+    });
 
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
@@ -42,6 +63,7 @@ export function CanvasTopBar({
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         restoreFocusRef.current = true;
         setMenuOpen(false);
       }
@@ -50,6 +72,7 @@ export function CanvasTopBar({
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
@@ -67,6 +90,34 @@ export function CanvasTopBar({
     action();
   };
 
+  const focusMenuItem = (key: string, currentTarget: HTMLButtonElement) => {
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+    );
+    const nextIndex = getRovingFocusIndex(
+      key,
+      items.indexOf(currentTarget),
+      items.map((item) => !item.disabled),
+    );
+    if (nextIndex === null) return false;
+    items[nextIndex]?.focus();
+    return true;
+  };
+
+  const handleMenuItemKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (focusMenuItem(event.key, event.currentTarget)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "Tab") {
+      if (tabCloseFrameRef.current !== null) return;
+      tabCloseFrameRef.current = requestAnimationFrame(() => {
+        tabCloseFrameRef.current = null;
+        setMenuOpen(false);
+      });
+    }
+  };
+
   return (
     <header className="simple-canvas-topbar" data-canvas-ui>
       <div className="simple-canvas-topbar-leading" ref={menuRef}>
@@ -75,24 +126,26 @@ export function CanvasTopBar({
           className="simple-canvas-menu-button"
           ref={menuButtonRef}
           data-active={menuOpen}
-          aria-label="画布菜单"
+          aria-label="Canvas menu"
           aria-haspopup="menu"
           aria-expanded={menuOpen}
-          title="画布菜单"
+          title="Canvas menu"
           onClick={() => setMenuOpen((current) => !current)}
         >
           <Icon name="menu" />
         </button>
 
         {menuOpen ? (
-          <div className="simple-canvas-menu" role="menu" aria-label="画布操作">
+          <div className="simple-canvas-menu" role="menu" aria-label="Canvas actions">
             <button
               type="button"
               role="menuitem"
+              tabIndex={-1}
               data-active={historyOpen}
               disabled={disabled}
-              aria-label="画布历史"
-              title="画布历史"
+              aria-label="Canvas history"
+              title="Canvas history"
+              onKeyDown={handleMenuItemKeyDown}
               onClick={() => runMenuAction(onToggleHistory)}
             >
               <Icon name="history" />
@@ -100,9 +153,11 @@ export function CanvasTopBar({
             <button
               type="button"
               role="menuitem"
+              tabIndex={-1}
               disabled={disabled}
-              aria-label="新建画布"
-              title="新建画布"
+              aria-label="New canvas"
+              title="New canvas"
+              onKeyDown={handleMenuItemKeyDown}
               onClick={() => runMenuAction(onNewCanvas)}
             >
               <Icon name="plus" />
@@ -110,9 +165,11 @@ export function CanvasTopBar({
             <button
               type="button"
               role="menuitem"
+              tabIndex={-1}
               disabled={disabled}
-              aria-label="下载画布"
-              title="下载画布"
+              aria-label="Download canvas"
+              title="Download canvas"
+              onKeyDown={handleMenuItemKeyDown}
               onClick={() => runMenuAction(onDownloadCanvas)}
             >
               <Icon name="download" />
@@ -122,12 +179,12 @@ export function CanvasTopBar({
       </div>
 
       <div className="simple-canvas-topbar-trailing">
-        <div className="simple-canvas-history-actions" aria-label="历史操作">
+        <div className="simple-canvas-history-actions" aria-label="History actions">
           <button
             type="button"
             disabled={disabled || !canUndo}
-            aria-label="撤销"
-            title="撤销"
+            aria-label="Undo"
+            title="Undo"
             onClick={onUndo}
           >
             <Icon name="undo" />
@@ -135,8 +192,8 @@ export function CanvasTopBar({
           <button
             type="button"
             disabled={disabled || !canRedo}
-            aria-label="重做"
-            title="重做"
+            aria-label="Redo"
+            title="Redo"
             onClick={onRedo}
           >
             <Icon name="redo" />

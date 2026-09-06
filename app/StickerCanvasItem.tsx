@@ -299,7 +299,7 @@ function StickerCanvasItemComponent({
       data-cropped={hasCrop}
       data-holo={Boolean(sticker.oilFilmEnabled)}
       style={style}
-      aria-label="贴纸"
+      aria-label="Sticker"
       role="group"
       tabIndex={0}
       onFocus={() => onSelect(sticker.id)}
@@ -314,7 +314,7 @@ function StickerCanvasItemComponent({
       onPointerMove={handleHoloPointerMove}
       onPointerLeave={handleHoloPointerLeave}
     >
-      {/* SVG 滤镜：扩充 Filter 边界范围至 200% 防止边缘厚描边被裁剪 */}
+      {/* Extend the SVG filter bounds to prevent thick outlines from being clipped. */}
       {sticker.outlineWidth && sticker.outlineWidth > 0 ? (
         <svg
           style={{ position: "absolute", width: 0, height: 0, pointerEvents: "none" }}
@@ -365,7 +365,7 @@ function StickerCanvasItemComponent({
           className="simple-sticker-img"
         />
 
-      {/* 镭射描边：独立环形遮罩，虹彩和镜面光斑跟随指针 */}
+      {/* An independent holographic outline follows the pointer. */}
       {sticker.oilFilmEnabled &&
       sticker.outlineWidth &&
       sticker.outlineWidth > 0 ? (
@@ -461,7 +461,7 @@ function StickerCanvasItemComponent({
         </svg>
       ) : null}
 
-      {/* 图片内部只保留非常轻的镭射膜质感 */}
+      {/* Keep the holographic texture inside the image subtle. */}
         {sticker.oilFilmEnabled ? (
           <div className="simple-sticker-oil-film" style={maskStyle}>
             <div className="simple-oil-spectrum" />
@@ -473,13 +473,13 @@ function StickerCanvasItemComponent({
         ) : null}
       </div>
 
-      {/* 抠图处理中：轻量转圈遮罩 */}
+      {/* A lightweight overlay is shown while removing the background. */}
       {isProcessing ? (
         <div
           className="simple-sticker-processing-overlay"
           data-canvas-ui
           role="status"
-          aria-label="正在移除背景"
+          aria-label="Removing background"
         >
           <span className="simple-processing-spinner" aria-hidden="true" />
         </div>
@@ -491,7 +491,7 @@ function StickerCanvasItemComponent({
             <button
               className="simple-sticker-crop-handle simple-sticker-crop-nw"
               type="button"
-              aria-label="裁剪左上角"
+              aria-label="Crop top left"
               onPointerDown={(event) =>
                 onGestureStart(event, sticker, "crop", "nw")
               }
@@ -499,7 +499,7 @@ function StickerCanvasItemComponent({
             <button
               className="simple-sticker-crop-handle simple-sticker-crop-ne"
               type="button"
-              aria-label="裁剪右上角"
+              aria-label="Crop top right"
               onPointerDown={(event) =>
                 onGestureStart(event, sticker, "crop", "ne")
               }
@@ -507,7 +507,7 @@ function StickerCanvasItemComponent({
             <button
               className="simple-sticker-crop-handle simple-sticker-crop-sw"
               type="button"
-              aria-label="裁剪左下角"
+              aria-label="Crop bottom left"
               onPointerDown={(event) =>
                 onGestureStart(event, sticker, "crop", "sw")
               }
@@ -515,7 +515,7 @@ function StickerCanvasItemComponent({
             <button
               className="simple-sticker-crop-handle simple-sticker-crop-se"
               type="button"
-              aria-label="裁剪右下角"
+              aria-label="Crop bottom right"
               onPointerDown={(event) =>
                 onGestureStart(event, sticker, "crop", "se")
               }
@@ -523,11 +523,11 @@ function StickerCanvasItemComponent({
           </>
         ) : (
           <>
-          {/* 顶部：旋转句柄 */}
+          {/* Top rotation handle. */}
           <button
             className="simple-sticker-rotate"
             type="button"
-            aria-label="旋转贴纸"
+            aria-label="Rotate sticker"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "rotate")
             }
@@ -535,11 +535,11 @@ function StickerCanvasItemComponent({
             <Icon name="rotate" />
           </button>
 
-          {/* 右上角、左下角、右下角：圆角折线缩放句柄 */}
+          {/* Top-right, bottom-left, and bottom-right resize handles. */}
           <button
             className="simple-sticker-corner tr"
             type="button"
-            aria-label="调整贴纸大小"
+            aria-label="Resize sticker"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }
@@ -547,7 +547,7 @@ function StickerCanvasItemComponent({
           <button
             className="simple-sticker-resize-bl"
             type="button"
-            aria-label="调整贴纸大小"
+            aria-label="Resize sticker"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }
@@ -555,7 +555,7 @@ function StickerCanvasItemComponent({
           <button
             className="simple-sticker-resize"
             type="button"
-            aria-label="调整贴纸大小"
+            aria-label="Resize sticker"
             onPointerDown={(event) =>
               onGestureStart(event, sticker, "resize")
             }

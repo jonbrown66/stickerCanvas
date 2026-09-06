@@ -21,13 +21,13 @@ export function CanvasZoomControls({
     <div
       className="simple-canvas-zoom-controls"
       data-canvas-ui
-      aria-label="画布缩放控制"
+      aria-label="Canvas zoom controls"
     >
       <button
         type="button"
         disabled={disabled}
-        aria-label="缩小"
-        title="缩小"
+        aria-label="Zoom out"
+        title="Zoom out"
         onClick={onZoomOut}
       >
         <Icon name="minus" />
@@ -36,8 +36,8 @@ export function CanvasZoomControls({
         type="button"
         className="simple-canvas-zoom-value"
         disabled={disabled}
-        aria-label="重置缩放"
-        title="重置缩放（100%）"
+        aria-label="Reset zoom"
+        title="Reset zoom (100%)"
         onClick={onResetZoom}
       >
         {Math.round(zoom * 100)}%
@@ -45,8 +45,8 @@ export function CanvasZoomControls({
       <button
         type="button"
         disabled={disabled}
-        aria-label="放大"
-        title="放大"
+        aria-label="Zoom in"
+        title="Zoom in"
         onClick={onZoomIn}
       >
         <Icon name="plus" />
@@ -55,8 +55,8 @@ export function CanvasZoomControls({
       <button
         type="button"
         disabled={disabled}
-        aria-label="适合画布"
-        title="适合画布内容"
+        aria-label="Fit canvas"
+        title="Fit canvas content"
         onClick={onFitToContent}
       >
         <Icon name="fit" />

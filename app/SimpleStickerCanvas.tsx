@@ -31,8 +31,11 @@ import {
   normalizeCanvasImageCrop,
 } from "@/lib/canvas-types";
 import { removeImageBackground } from "@/lib/background-removal";
+import { getPinchView, type PinchGesture, type PointerSample } from "@/lib/canvas-viewport";
+import { createCanvasTaskScope, type CanvasTask } from "@/lib/canvas-task";
 import {
   appendStickerHistory,
+  equalCanvasElementRecords,
   createStickerHistory,
   moveStickerHistory,
   restoreStickerSnapshot,
@@ -54,6 +57,7 @@ import {
   replaceStickerRecords,
   saveCanvasBackground,
   saveCanvasProject,
+  switchCanvasProject,
   saveStickerRecord,
   type CanvasProject,
 } from "@/lib/sticker-storage";
@@ -89,12 +93,6 @@ type StickerGesture = {
   centerY: number;
   start: CanvasElement;
   latest: CanvasElement;
-};
-
-type PointerSample = {
-  clientX: number;
-  clientY: number;
-  pointerId: number;
 };
 
 type CanvasDropPoint = {
@@ -322,7 +320,7 @@ async function preloadImageUrl(url: string) {
 
 async function fetchSampleImage(url: string) {
   const response = await fetch(url);
-  if (!response.ok) throw new Error("示例不可用");
+  if (!response.ok) throw new Error("Example is unavailable");
   return response.blob();
 }
 
@@ -396,7 +394,12 @@ export function SimpleStickerCanvas() {
   const stickersRef = useRef<CanvasElement[]>([]);
   const selectedIdRef = useRef<string | null>(null);
   const processingRef = useRef(false);
+  const activeCanvasIdRef = useRef<string | null>(null);
+  const projectTransitionRef = useRef(false);
+  const cutoutTasksRef = useRef(createCanvasTaskScope<CanvasElement>());
+  const cutoutOperationRef = useRef<CanvasTask<CanvasElement> | null>(null);
   const pendingCutoutRef = useRef<{
+    task: CanvasTask<CanvasElement>;
     effectId: string;
     stickerId: string;
     updated: CanvasSticker;
@@ -415,13 +418,7 @@ export function SimpleStickerCanvas() {
   const externalDragDepthRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const pointerSampleRef = useRef<PointerSample | null>(null);
-  const pinchRef = useRef<{
-    ids: [number, number];
-    distance: number;
-    view: CanvasView;
-    anchorX: number;
-    anchorY: number;
-  } | null>(null);
+  const pinchRef = useRef<PinchGesture | null>(null);
 
   const historyRef = useRef<StickerHistory>({ entries: [], index: -1 });
 
@@ -455,6 +452,28 @@ export function SimpleStickerCanvas() {
     useState<CanvasBackgroundConfig>(readCanvasBackground);
   const [backgroundMenuOpen, setBackgroundMenuOpen] = useState(false);
   const [backgroundInspectorOpen, setBackgroundInspectorOpen] = useState(false);
+
+  const activateCanvas = useCallback((id: string) => {
+    activeCanvasIdRef.current = id;
+    setActiveCanvasId(id);
+  }, []);
+
+  const cancelCanvasTasks = useCallback((elementId?: string) => {
+    if (!cutoutTasksRef.current.cancel(elementId)) return;
+    const wasProcessing = cutoutOperationRef.current !== null;
+    cutoutOperationRef.current = null;
+    if (wasProcessing) processingRef.current = false;
+    const pending = pendingCutoutRef.current;
+    if (pending) URL.revokeObjectURL(pending.updated.url);
+    pendingCutoutRef.current = null;
+    setDissolveEffect(null);
+    setProcessingStickerId(null);
+  }, []);
+
+  const clearPendingSaves = useCallback(() => {
+    Object.values(saveTimerRef.current).forEach((timer) => window.clearTimeout(timer));
+    saveTimerRef.current = {};
+  }, []);
 
   const updateBackground = useCallback((next: CanvasBackgroundConfig) => {
     setBackground(next);
@@ -504,6 +523,8 @@ export function SimpleStickerCanvas() {
 
   const applyHistorySnapshot = useCallback(
     (snapshot: StickerHistory["entries"][number]) => {
+      cancelCanvasTasks();
+      clearPendingSaves();
       const restored = restoreStickerSnapshot(snapshot, stickersRef.current);
       stickersRef.current = restored.stickers;
       setStickers(restored.stickers);
@@ -521,10 +542,10 @@ export function SimpleStickerCanvas() {
         0,
       );
       void replaceStickerRecords(restored.stickers).catch(() =>
-        setNotice("历史记录保存失败"),
+        setNotice("Could not save canvas history"),
       );
     },
-    [],
+    [cancelCanvasTasks, clearPendingSaves],
   );
 
   const undo = useCallback(() => {
@@ -583,6 +604,14 @@ export function SimpleStickerCanvas() {
       const pending = pendingCutoutRef.current;
       if (!pending || pending.effectId !== effectId) return;
       pendingCutoutRef.current = null;
+      if (!cutoutTasksRef.current.isCurrent(
+        pending.task, activeCanvasIdRef.current, stickersRef.current,
+      )) {
+        URL.revokeObjectURL(pending.updated.url);
+        cutoutTasksRef.current.finish(pending.task);
+        return;
+      }
+      cutoutTasksRef.current.finish(pending.task);
       replaceStickers((current) =>
         current.map((sticker) =>
           sticker.id === pending.stickerId ? pending.updated : sticker,
@@ -616,29 +645,36 @@ export function SimpleStickerCanvas() {
       );
       if (!current || current.type !== "image") return;
       const updated = { ...current, ...patch };
-
-      replaceStickers(
+      const changed = !equalCanvasElementRecords([current], [updated]);
+      if (!changed && !commit) return;
+      if (changed) replaceStickers(
         (stickers) =>
           stickers.map((sticker) =>
             sticker.id === stickerId ? updated : sticker,
           ),
         commit,
       );
+      else if (commit) pushHistory(stickersRef.current);
 
-      if (saveTimerRef.current[stickerId]) {
+      const pendingSave = saveTimerRef.current[stickerId];
+      if (pendingSave) {
         window.clearTimeout(saveTimerRef.current[stickerId]);
       }
+      const record = changed ? updated : current;
+      const isCurrent = () => stickersRef.current.find((item) => item.id === stickerId) === record;
       if (commit) {
         delete saveTimerRef.current[stickerId];
-        void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
+        if (changed || pendingSave) {
+          void saveStickerRecord(record, isCurrent).catch(() => setNotice("Could not save"));
+        }
       } else {
         saveTimerRef.current[stickerId] = window.setTimeout(() => {
-          void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
+          void saveStickerRecord(record, isCurrent).catch(() => setNotice("Could not save"));
           delete saveTimerRef.current[stickerId];
         }, 300);
       }
     },
-    [replaceStickers],
+    [pushHistory, replaceStickers],
   );
 
   const updateCanvasElementProperties = useCallback(
@@ -657,40 +693,50 @@ export function SimpleStickerCanvas() {
         ...current,
         ...patch,
       } as CanvasTextElement | CanvasShapeElement;
-      replaceStickers(
+      const changed = !equalCanvasElementRecords([current], [updated]);
+      if (!changed && !commit) return;
+      if (changed) replaceStickers(
         (elements) =>
           elements.map((element) =>
             element.id === elementId ? updated : element,
           ),
         commit,
       );
+      else if (commit) pushHistory(stickersRef.current);
 
-      if (saveTimerRef.current[elementId]) {
+      const pendingSave = saveTimerRef.current[elementId];
+      if (pendingSave) {
         window.clearTimeout(saveTimerRef.current[elementId]);
       }
+      const record = changed ? updated : current;
+      const isCurrent = () => stickersRef.current.find((item) => item.id === elementId) === record;
       if (commit) {
         delete saveTimerRef.current[elementId];
-        void saveStickerRecord(updated).catch(() => setNotice("保存失败"));
+        if (changed || pendingSave) {
+          void saveStickerRecord(record, isCurrent).catch(() => setNotice("Could not save"));
+        }
       } else {
         saveTimerRef.current[elementId] = window.setTimeout(() => {
-          void saveStickerRecord(updated).catch(() =>
-            setNotice("保存失败"),
+          void saveStickerRecord(record, isCurrent).catch(() =>
+            setNotice("Could not save"),
           );
           delete saveTimerRef.current[elementId];
         }, 240);
       }
     },
-    [replaceStickers],
+    [pushHistory, replaceStickers],
   );
 
   useEffect(() => {
     let disposed = false;
+    const cutoutTasks = cutoutTasksRef.current;
     void readStickerRecords()
       .then(async (records) => {
         if (disposed) return;
         let projects = await readCanvasProjects();
-        const storedCanvasId = localStorage.getItem(ACTIVE_CANVAS_KEY);
-        let currentProject = projects.find(
+        let storedCanvasId: string | null = null;
+        try { storedCanvasId = localStorage.getItem(ACTIVE_CANVAS_KEY); } catch { /* IndexedDB remains authoritative. */ }
+        let currentProject = projects.find((project) => project.isActive) ?? projects.find(
           (project) => project.id === storedCanvasId,
         );
         if (!currentProject) {
@@ -708,7 +754,7 @@ export function SimpleStickerCanvas() {
         }
         if (disposed) return;
         setCanvasProjects(projects);
-        setActiveCanvasId(currentProject.id);
+        activateCanvas(currentProject.id);
         const seededVersion = localStorage.getItem(SEEDED_KEY);
         const existingExample = records.find(
           (record) =>
@@ -830,10 +876,14 @@ export function SimpleStickerCanvas() {
           );
         }
       })
-      .catch(() => setNotice("恢复画布失败"));
+      .catch(() => setNotice("Could not restore canvas"));
 
     return () => {
       disposed = true;
+      cutoutTasks.cancel();
+      if (pendingCutoutRef.current) URL.revokeObjectURL(pendingCutoutRef.current.updated.url);
+      pendingCutoutRef.current = null;
+      cutoutOperationRef.current = null;
       Object.values(saveTimerRef.current).forEach((timer) =>
         window.clearTimeout(timer),
       );
@@ -843,7 +893,7 @@ export function SimpleStickerCanvas() {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
       });
     };
-  }, [replaceHistory, replaceStickers]);
+  }, [activateCanvas, replaceHistory, replaceStickers]);
 
   const persistView = useCallback((next = viewRef.current) => {
     try {
@@ -875,14 +925,21 @@ export function SimpleStickerCanvas() {
   );
 
   const cutoutSticker = useCallback(
-    async (sticker: CanvasSticker) => {
-      if (sticker.isCutout && !sticker.originalImage) {
-        setNotice("原始图片不可用");
-        return;
-      }
-      if (processingRef.current) return;
+    async (selectedSticker: CanvasSticker) => {
+      if (processingRef.current || projectTransitionRef.current) return;
       const pending = pendingCutoutRef.current;
       if (pending) commitPendingCutout(pending.effectId);
+      const sticker = stickersRef.current.find((item) => item.id === selectedSticker.id);
+      if (!sticker || sticker.type !== "image") return;
+      if (sticker.isCutout && !sticker.originalImage) {
+        setNotice("Original image is unavailable");
+        return;
+      }
+      const task = cutoutTasksRef.current.start(activeCanvasIdRef.current, sticker);
+      cutoutOperationRef.current = task;
+      const isCurrent = () => cutoutTasksRef.current.isCurrent(
+        task, activeCanvasIdRef.current, stickersRef.current,
+      );
       processingRef.current = true;
       setDissolveEffect(null);
       setProcessingStickerId(sticker.id);
@@ -896,6 +953,7 @@ export function SimpleStickerCanvas() {
           const restoredUrl = URL.createObjectURL(restoredImage);
           createdUrl = restoredUrl;
           await preloadImageUrl(restoredUrl);
+          if (!isCurrent()) return;
           const restored: CanvasSticker = {
             ...sticker,
             image: restoredImage,
@@ -905,7 +963,8 @@ export function SimpleStickerCanvas() {
             crop: undefined,
             originalImage: restoredImage,
           };
-          await saveStickerRecord(restored);
+          await saveStickerRecord(restored, isCurrent);
+          if (!isCurrent()) return;
           replaceStickers((current) =>
             current.map((currentSticker) =>
               currentSticker.id === sticker.id ? restored : currentSticker,
@@ -913,7 +972,7 @@ export function SimpleStickerCanvas() {
           );
           URL.revokeObjectURL(sticker.url);
           createdUrl = null;
-          setNotice("已恢复原图背景");
+          setNotice("Original image background restored");
           return;
         }
 
@@ -921,7 +980,8 @@ export function SimpleStickerCanvas() {
         const sourceImageForCutout = sticker.crop
           ? await cropImageBlob(sourceImage, sticker.crop)
           : sourceImage;
-        const result = await removeImageBackground(sourceImageForCutout);
+        const result = await removeImageBackground(sourceImageForCutout, undefined, task.signal);
+        if (!isCurrent()) return;
 
         const [cutout, dissolveTexture] = await Promise.all([
           createOutlinedCutout(
@@ -943,6 +1003,7 @@ export function SimpleStickerCanvas() {
         const newUrl = URL.createObjectURL(cutout.blob);
         createdUrl = newUrl;
         await preloadImageUrl(newUrl);
+        if (!isCurrent()) return;
 
         const updated: CanvasSticker = {
           ...sticker,
@@ -956,12 +1017,14 @@ export function SimpleStickerCanvas() {
           originalImage: sourceImageForCutout,
         };
 
-        await saveStickerRecord(updated);
+        await saveStickerRecord(updated, isCurrent);
+        if (!isCurrent()) return;
         const viewport = viewportRef.current?.getBoundingClientRect();
         const currentView = viewRef.current;
         if (viewport && dissolveTexture) {
           const effectId = `${sticker.id}:${Date.now()}`;
           pendingCutoutRef.current = {
+            task,
             effectId,
             stickerId: sticker.id,
             updated,
@@ -988,17 +1051,22 @@ export function SimpleStickerCanvas() {
           );
           URL.revokeObjectURL(sticker.url);
         }
-        setNotice("抠图完成");
+        setNotice("Background removed");
         createdUrl = null;
       } catch (error) {
-        if (createdUrl) URL.revokeObjectURL(createdUrl);
+        if (!isCurrent()) return;
         console.error("Could not cutout sticker.", error);
         setNotice(
-          error instanceof Error ? error.message : "抠图失败",
+          error instanceof Error ? error.message : "Could not remove background",
         );
       } finally {
-        processingRef.current = false;
-        setProcessingStickerId(null);
+        if (createdUrl) URL.revokeObjectURL(createdUrl);
+        if (cutoutOperationRef.current === task) {
+          cutoutOperationRef.current = null;
+          processingRef.current = false;
+          setProcessingStickerId(null);
+        }
+        if (pendingCutoutRef.current?.task !== task) cutoutTasksRef.current.finish(task);
       }
     },
     [commitPendingCutout, replaceStickers],
@@ -1006,13 +1074,13 @@ export function SimpleStickerCanvas() {
 
   const processFile = useCallback(
     async (file?: File, dropPoint?: CanvasDropPoint) => {
-      if (!file || processingRef.current) return;
+      if (!file || processingRef.current || projectTransitionRef.current) return;
       if (!isSupportedImageFile(file)) {
-        setNotice("请选择图片");
+        setNotice("Please select an image");
         return;
       }
       if (file.size > 20_000_000) {
-        setNotice("图片不能超过 20 MB");
+        setNotice("Image must be 20 MB or smaller");
         return;
       }
 
@@ -1021,7 +1089,7 @@ export function SimpleStickerCanvas() {
       setShapeMenuOpen(false);
       processingRef.current = true;
       setIsImporting(true);
-      setNotice("正在准备图片…");
+      setNotice("Preparing image…");
       let createdUrl: string | null = null;
       try {
         const image = isHeicFile(file) ? await convertHeicToJpeg(file) : file;
@@ -1093,14 +1161,14 @@ export function SimpleStickerCanvas() {
             ),
           650,
         );
-        setNotice("图片已添加");
+        setNotice("Image added");
       } catch (error) {
         if (createdUrl) {
           URL.revokeObjectURL(createdUrl);
         }
         console.error("Could not load image.", error);
         setNotice(
-          error instanceof Error ? error.message : "图片加载失败",
+          error instanceof Error ? error.message : "Could not load image",
         );
       } finally {
         processingRef.current = false;
@@ -1191,7 +1259,7 @@ export function SimpleStickerCanvas() {
         isSupportedImageFile,
       );
       if (!files.length) {
-        setNotice("请选择图片");
+        setNotice("Please select an image");
         return;
       }
 
@@ -1222,7 +1290,7 @@ export function SimpleStickerCanvas() {
       kind: StickerGestureKind,
       cropHandle?: CanvasCropHandle,
     ) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || projectTransitionRef.current) return;
       event.preventDefault();
       event.stopPropagation();
       const rect = viewportRef.current?.getBoundingClientRect();
@@ -1356,7 +1424,7 @@ export function SimpleStickerCanvas() {
       );
       replaceStickers(next, false);
       void saveStickerRecord(gesture.latest).catch(() =>
-        setNotice("保存失败"),
+        setNotice("Could not save"),
       );
       pushHistory(next);
     },
@@ -1365,6 +1433,7 @@ export function SimpleStickerCanvas() {
 
   const deleteSticker = useCallback(
     (sticker: CanvasElement) => {
+      cancelCanvasTasks(sticker.id);
       if (saveTimerRef.current[sticker.id]) {
         window.clearTimeout(saveTimerRef.current[sticker.id]);
         delete saveTimerRef.current[sticker.id];
@@ -1383,9 +1452,9 @@ export function SimpleStickerCanvas() {
             window.setTimeout(() => URL.revokeObjectURL(sticker.url), 0);
           }
         })
-        .catch(() => setNotice("删除失败"));
+        .catch(() => setNotice("Could not delete"));
     },
-    [replaceStickers, selectSticker],
+    [cancelCanvasTasks, replaceStickers, selectSticker],
   );
 
   const duplicateElement = useCallback(
@@ -1421,7 +1490,7 @@ export function SimpleStickerCanvas() {
       try {
         await saveStickerRecord(duplicate);
       } catch {
-        setNotice("复制失败");
+        setNotice("Could not duplicate");
       }
     },
     [replaceStickers, selectSticker],
@@ -1454,7 +1523,7 @@ export function SimpleStickerCanvas() {
       );
       replaceStickers(next);
       void Promise.all(next.map((element) => saveStickerRecord(element))).catch(
-        () => setNotice("图层调整失败"),
+        () => setNotice("Could not update layer order"),
       );
     },
     [replaceStickers],
@@ -1490,7 +1559,7 @@ export function SimpleStickerCanvas() {
       );
       setEditingId(null);
       void saveStickerRecord(updated).catch(() =>
-        setNotice("保存失败"),
+        setNotice("Could not save"),
       );
     },
     [deleteSticker, replaceStickers],
@@ -1557,7 +1626,7 @@ export function SimpleStickerCanvas() {
       setShapeMenuOpen(false);
       setEditingId(element.id);
       void saveStickerRecord(element).catch(() =>
-        setNotice("保存失败"),
+        setNotice("Could not save"),
       );
     },
     [replaceStickers, selectSticker],
@@ -1690,7 +1759,7 @@ export function SimpleStickerCanvas() {
         replaceStickers(next, false);
         pushHistory(next);
         void saveStickerRecord(drawing.latest).catch(() =>
-          setNotice("保存失败"),
+          setNotice("Could not save"),
         );
       }
       setActiveTool("select");
@@ -1725,12 +1794,12 @@ export function SimpleStickerCanvas() {
         anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0);
       })
-      .catch(() => setNotice("下载失败"));
+      .catch(() => setNotice("Could not download"));
   }, []);
 
   const exportCanvas = useCallback(async () => {
     if (!stickersRef.current.length) {
-      setNotice("画布为空");
+      setNotice("Canvas is empty");
       return;
     }
     setIsExporting(true);
@@ -1750,7 +1819,7 @@ export function SimpleStickerCanvas() {
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (error) {
       setNotice(
-        error instanceof Error ? error.message : "画布导出失败",
+        error instanceof Error ? error.message : "Could not export canvas",
       );
     } finally {
       setIsExporting(false);
@@ -1768,10 +1837,17 @@ export function SimpleStickerCanvas() {
   }, [exportCanvas]);
 
   const createNewCanvas = useCallback(async () => {
+    if (projectTransitionRef.current || isExporting ||
+      (processingRef.current && !cutoutOperationRef.current)) return;
+    projectTransitionRef.current = true;
+    cancelCanvasTasks();
+    clearPendingSaves();
     setIsCreatingCanvas(true);
     setNotice("");
+    let createdDefaults: CanvasSticker[] | null = null;
     try {
       const defaults = await createDefaultCanvasStickers();
+      createdDefaults = defaults;
       const previous = stickersRef.current;
       const now = Date.now();
       const currentProject = canvasProjects.find(
@@ -1783,33 +1859,34 @@ export function SimpleStickerCanvas() {
         createdAt: now,
         updatedAt: now,
         elements: defaults,
+        isActive: true,
       };
       const archivedProject = currentProject
         ? {
             ...currentProject,
             updatedAt: now,
             elements: previous,
+            isActive: false,
           }
         : null;
-      await Promise.all([
-        ...(archivedProject ? [saveCanvasProject(archivedProject)] : []),
-        saveCanvasProject(nextProject),
-      ]);
-      await replaceStickerRecords(defaults);
+      await switchCanvasProject(archivedProject, nextProject);
       replaceStickers(defaults, false);
+      createdDefaults = null;
       previous.forEach((sticker) => {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
       });
       replaceHistory(createStickerHistory(defaults));
-      localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
-      localStorage.setItem(ACTIVE_CANVAS_KEY, nextProject.id);
+      try {
+        localStorage.setItem(SEEDED_KEY, SEEDED_VERSION);
+        localStorage.setItem(ACTIVE_CANVAS_KEY, nextProject.id);
+      } catch { /* The active project is also committed in IndexedDB. */ }
       setCanvasProjects((current) => [
         ...current.map((project) =>
           project.id === archivedProject?.id ? archivedProject : project,
         ),
         nextProject,
       ]);
-      setActiveCanvasId(nextProject.id);
+      activateCanvas(nextProject.id);
       setHistoryOpen(false);
       setActiveTool("select");
       setShapeMenuOpen(false);
@@ -1817,15 +1894,21 @@ export function SimpleStickerCanvas() {
       setDrawingId(null);
       setCropEditingId(null);
       selectSticker(null);
-      setNotice("新画布已准备好");
+      setNotice("New canvas is ready");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "新建画布失败");
+      setNotice(error instanceof Error ? error.message : "Could not create canvas");
     } finally {
+      createdDefaults?.forEach((sticker) => URL.revokeObjectURL(sticker.url));
+      projectTransitionRef.current = false;
       setIsCreatingCanvas(false);
     }
   }, [
     activeCanvasId,
+    activateCanvas,
+    cancelCanvasTasks,
     canvasProjects,
+    clearPendingSaves,
+    isExporting,
     replaceHistory,
     replaceStickers,
     selectSticker,
@@ -1833,6 +1916,8 @@ export function SimpleStickerCanvas() {
 
   const openCanvasProject = useCallback(
     async (projectId: string) => {
+      if (projectTransitionRef.current || isExporting ||
+        (processingRef.current && !cutoutOperationRef.current)) return;
       if (projectId === activeCanvasId) {
         setHistoryOpen(false);
         return;
@@ -1841,6 +1926,9 @@ export function SimpleStickerCanvas() {
         (project) => project.id === projectId,
       );
       if (!targetProject) return;
+      projectTransitionRef.current = true;
+      cancelCanvasTasks();
+      clearPendingSaves();
       setIsCreatingCanvas(true);
       setNotice("");
       try {
@@ -1853,13 +1941,11 @@ export function SimpleStickerCanvas() {
               ...currentProject,
               updatedAt: now,
               elements: stickersRef.current,
+              isActive: false,
             }
           : null;
-        const openedProject = { ...targetProject, updatedAt: now };
-        await Promise.all([
-          ...(archivedProject ? [saveCanvasProject(archivedProject)] : []),
-          saveCanvasProject(openedProject),
-        ]);
+        const openedProject = { ...targetProject, updatedAt: now, isActive: true };
+        await switchCanvasProject(archivedProject, openedProject);
         const restored = [...openedProject.elements]
           .sort((left, right) => left.zIndex - right.zIndex)
           .map(
@@ -1869,13 +1955,14 @@ export function SimpleStickerCanvas() {
                 : { ...record },
           );
         const previous = stickersRef.current;
-        await replaceStickerRecords(restored);
         replaceStickers(restored, false);
         previous.forEach((sticker) => {
           if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
         });
         replaceHistory(createStickerHistory(restored));
-        localStorage.setItem(ACTIVE_CANVAS_KEY, openedProject.id);
+        try {
+          localStorage.setItem(ACTIVE_CANVAS_KEY, openedProject.id);
+        } catch { /* The active project is also committed in IndexedDB. */ }
         setCanvasProjects((current) =>
           current.map((project) =>
             project.id === archivedProject?.id
@@ -1885,7 +1972,7 @@ export function SimpleStickerCanvas() {
                 : project,
           ),
         );
-        setActiveCanvasId(openedProject.id);
+        activateCanvas(openedProject.id);
         setHistoryOpen(false);
         setActiveTool("select");
         setShapeMenuOpen(false);
@@ -1893,16 +1980,21 @@ export function SimpleStickerCanvas() {
         setDrawingId(null);
         setCropEditingId(null);
         selectSticker(null);
-        setNotice(`已打开「${openedProject.name}」`);
+        setNotice(`Opened “${openedProject.name}”`);
       } catch (error) {
-        setNotice(error instanceof Error ? error.message : "打开画布失败");
+        setNotice(error instanceof Error ? error.message : "Could not open canvas");
       } finally {
+        projectTransitionRef.current = false;
         setIsCreatingCanvas(false);
       }
     },
     [
       activeCanvasId,
+      activateCanvas,
+      cancelCanvasTasks,
       canvasProjects,
+      clearPendingSaves,
+      isExporting,
       replaceHistory,
       replaceStickers,
       selectSticker,
@@ -1911,10 +2003,14 @@ export function SimpleStickerCanvas() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || projectTransitionRef.current) return;
       const target = event.target;
       if (
         target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof Element && target.closest(
+          '[data-canvas-ui], [contenteditable="true"], select',
+        ))
       ) {
         return;
       }
@@ -1989,7 +2085,7 @@ export function SimpleStickerCanvas() {
           y: sticker.y + deltaY,
         };
         updateSticker(sticker.id, { x: updated.x, y: updated.y }, true);
-        void saveStickerRecord(updated);
+        void saveStickerRecord(updated).catch(() => setNotice("Could not save"));
         return;
       }
 
@@ -2006,9 +2102,10 @@ export function SimpleStickerCanvas() {
   }, [deleteSticker, undo, redo, updateSticker, selectSticker]);
 
   const startViewportPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    if (projectTransitionRef.current) return;
     if (
       editingId &&
-      !(event.target as HTMLElement).closest("textarea[aria-label='编辑文字']")
+      !(event.target as HTMLElement).closest("textarea[aria-label='Edit text']")
     ) {
       const activeElement = document.activeElement;
       if (activeElement instanceof HTMLTextAreaElement) {
@@ -2083,45 +2180,24 @@ export function SimpleStickerCanvas() {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const moveViewportPointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    const touch = touchPointsRef.current.get(event.pointerId);
-    if (touch) {
-      touch.x = event.clientX;
-      touch.y = event.clientY;
-    }
+  const moveViewportPointer = useCallback((sample: PointerSample) => {
     const pinch = pinchRef.current;
     if (pinch) {
       const first = touchPointsRef.current.get(pinch.ids[0]);
       const second = touchPointsRef.current.get(pinch.ids[1]);
-      const rect = event.currentTarget.getBoundingClientRect();
-      if (!first || !second) return;
-      event.preventDefault();
-      const distance = Math.max(
-        1,
-        Math.hypot(first.x - second.x, first.y - second.y),
-      );
-      const zoom = clamp(
-        pinch.view.zoom * (distance / pinch.distance),
-        MIN_ZOOM,
-        MAX_ZOOM,
-      );
-      const middleX = (first.x + second.x) / 2;
-      const middleY = (first.y + second.y) / 2;
-      const nextView = {
-        x: pinch.anchorX - (middleX - rect.left - rect.width / 2) / zoom,
-        y: pinch.anchorY - (middleY - rect.top - rect.height / 2) / zoom,
-        zoom,
-      };
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (!first || !second || !rect) return;
+      const nextView = getPinchView(pinch, first, second, rect, MIN_ZOOM, MAX_ZOOM);
       viewRef.current = nextView;
       applyViewTransform(worldRef.current, gridRef.current, nextView);
       return;
     }
     const pan = panRef.current;
-    if (!pan || pan.pointerId !== event.pointerId) return;
+    if (!pan || pan.pointerId !== sample.pointerId) return;
     const nextView = {
       ...pan.view,
-      x: pan.view.x - (event.clientX - pan.clientX) / pan.view.zoom,
-      y: pan.view.y - (event.clientY - pan.clientY) / pan.view.zoom,
+      x: pan.view.x - (sample.clientX - pan.clientX) / pan.view.zoom,
+      y: pan.view.y - (sample.clientY - pan.clientY) / pan.view.zoom,
     };
     viewRef.current = nextView;
     applyViewTransform(worldRef.current, gridRef.current, nextView);
@@ -2129,6 +2205,12 @@ export function SimpleStickerCanvas() {
 
   const moveGlobalPointer = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
+      // Keep both touches current even when their events share one animation frame.
+      const touch = touchPointsRef.current.get(event.pointerId);
+      if (touch) {
+        touch.x = event.clientX;
+        touch.y = event.clientY;
+      }
       pointerSampleRef.current = {
         clientX: event.clientX,
         clientY: event.clientY,
@@ -2145,10 +2227,7 @@ export function SimpleStickerCanvas() {
         } else if (gestureRef.current) {
           moveStickerGesture(sample);
         } else {
-          moveViewportPointer({
-            ...sample,
-            preventDefault: () => {},
-          } as unknown as ReactPointerEvent<HTMLElement>);
+          moveViewportPointer(sample);
         }
       });
     },
@@ -2156,6 +2235,19 @@ export function SimpleStickerCanvas() {
   );
 
   const finishViewportPointer = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (event.type !== "pointercancel") {
+      const touch = touchPointsRef.current.get(event.pointerId);
+      if (touch) {
+        touch.x = event.clientX;
+        touch.y = event.clientY;
+      }
+      moveViewportPointer(event);
+    }
+    pointerSampleRef.current = null;
     touchPointsRef.current.delete(event.pointerId);
     if (
       pinchRef.current?.ids.includes(event.pointerId) ||
@@ -2169,7 +2261,7 @@ export function SimpleStickerCanvas() {
     }
     setView(viewRef.current);
     persistView();
-  }, [persistView]);
+  }, [moveViewportPointer, persistView]);
 
   const finishGlobalPointer = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
@@ -2378,8 +2470,8 @@ export function SimpleStickerCanvas() {
         <div className="simple-drop-overlay" role="status" aria-live="polite">
           <div className="simple-drop-overlay-card">
             <Icon name="image" />
-            <strong>拖入图片即可添加</strong>
-            <span>松开鼠标，将图片放置在这里</span>
+            <strong>Drop an image to add it</strong>
+            <span>Release to place the image here</span>
           </div>
         </div>
       ) : null}
@@ -2491,12 +2583,12 @@ export function SimpleStickerCanvas() {
         <div
           className="simple-empty-state simple-empty-hint"
           role="note"
-          aria-label="开始创作提示"
+          aria-label="Start creating hint"
         >
-          <span className="simple-empty-state-kicker">开始创作</span>
-          <strong>添加图片，或直接绘制图形</strong>
+          <span className="simple-empty-state-kicker">Start Creating</span>
+          <strong>Add an image or draw a shape</strong>
           <span className="simple-empty-state-detail">
-            拖入图片 · 文字工具 · 形状工具
+            Drop an image · Text tool · Shape tools
           </span>
         </div>
       ) : null}
@@ -2507,10 +2599,10 @@ export function SimpleStickerCanvas() {
           <strong>
             {notice ||
               (isCreatingCanvas
-                ? "正在新建画布…"
+                ? "Creating canvas…"
                 : isExporting
-                  ? "正在导出画布…"
-                  : "正在生成贴纸…")}
+                  ? "Exporting canvas…"
+                  : "Creating sticker…")}
           </strong>
         </div>
       ) : notice ? (
@@ -2531,17 +2623,17 @@ export function SimpleStickerCanvas() {
             className="simple-canvas-history-backdrop"
             type="button"
             data-canvas-ui
-             aria-label="关闭画布历史"
+             aria-label="Close canvas history"
             onClick={() => setHistoryOpen(false)}
           />
-          <aside className="simple-canvas-history" data-canvas-ui aria-label="画布历史">
+          <aside className="simple-canvas-history" data-canvas-ui aria-label="Canvas history">
             <div className="simple-canvas-history-header">
-              <strong>画布历史</strong>
+              <strong>Canvas History</strong>
               <button
                 type="button"
                 onClick={() => setHistoryOpen(false)}
-                aria-label="关闭画布历史"
-                title="关闭"
+                aria-label="Close canvas history"
+                title="Close"
               >
                 <Icon name="close" />
               </button>
