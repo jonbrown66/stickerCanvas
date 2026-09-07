@@ -903,6 +903,54 @@ export function SimpleStickerCanvas() {
     }
   }, []);
 
+  const centerCanvasElements = useCallback((elements: CanvasElement[]) => {
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    if (!viewport || !elements.length) {
+      const next = { x: 0, y: 0, zoom: 1 };
+      updateView(next);
+      persistView(next);
+      return;
+    }
+
+    let left = Number.POSITIVE_INFINITY;
+    let top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    for (const element of elements) {
+      const angle = (element.rotation * Math.PI) / 180;
+      const halfWidth = element.width / 2;
+      const halfHeight = element.height / 2;
+      const boundsWidth =
+        Math.abs(Math.cos(angle)) * halfWidth +
+        Math.abs(Math.sin(angle)) * halfHeight;
+      const boundsHeight =
+        Math.abs(Math.sin(angle)) * halfWidth +
+        Math.abs(Math.cos(angle)) * halfHeight;
+      left = Math.min(left, element.x - boundsWidth);
+      top = Math.min(top, element.y - boundsHeight);
+      right = Math.max(right, element.x + boundsWidth);
+      bottom = Math.max(bottom, element.y + boundsHeight);
+    }
+
+    const padding = viewport.width <= 760 ? 32 : 96;
+    const contentWidth = Math.max(1, right - left);
+    const contentHeight = Math.max(1, bottom - top);
+    const next = {
+      x: (left + right) / 2,
+      y: (top + bottom) / 2,
+      zoom: clamp(
+        Math.min(
+          Math.max(160, viewport.width - padding * 2) / contentWidth,
+          Math.max(160, viewport.height - padding * 2) / contentHeight,
+        ),
+        MIN_ZOOM,
+        MAX_ZOOM,
+      ),
+    };
+    updateView(next);
+    persistView(next);
+  }, [persistView, updateView]);
+
   const updateSticker = useCallback(
     (
       id: string,
@@ -1871,6 +1919,7 @@ export function SimpleStickerCanvas() {
         : null;
       await switchCanvasProject(archivedProject, nextProject);
       replaceStickers(defaults, false);
+      centerCanvasElements(defaults);
       createdDefaults = null;
       previous.forEach((sticker) => {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
@@ -1907,6 +1956,7 @@ export function SimpleStickerCanvas() {
     activateCanvas,
     cancelCanvasTasks,
     canvasProjects,
+    centerCanvasElements,
     clearPendingSaves,
     isExporting,
     replaceHistory,
@@ -1956,6 +2006,7 @@ export function SimpleStickerCanvas() {
           );
         const previous = stickersRef.current;
         replaceStickers(restored, false);
+        centerCanvasElements(restored);
         previous.forEach((sticker) => {
           if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
         });
@@ -1993,6 +2044,7 @@ export function SimpleStickerCanvas() {
       activateCanvas,
       cancelCanvasTasks,
       canvasProjects,
+      centerCanvasElements,
       clearPendingSaves,
       isExporting,
       replaceHistory,

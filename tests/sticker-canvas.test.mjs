@@ -74,6 +74,9 @@ test("keeps canvas concerns split into focused modules", async () => {
   assert.match(canvas, /crop: sticker\.crop/);
   assert.match(canvas, /opacity: sticker\.opacity/);
   assert.match(canvas, /<CanvasZoomControls[\s\S]*?onFitToContent=\{fitCanvasToContent\}/);
+  assert.match(canvas, /const centerCanvasElements = useCallback/);
+  assert.match(canvas, /centerCanvasElements\(defaults\)/);
+  assert.match(canvas, /centerCanvasElements\(restored\)/);
   for (const label of ["Canvas history", "New canvas", "Download canvas"]) {
     assert.match(topbar, new RegExp(`aria-label="${label}"`));
     assert.match(topbar, new RegExp(`title="${label}"`));

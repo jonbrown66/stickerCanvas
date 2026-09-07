@@ -136,6 +136,9 @@ test("element item commits blurred text and renders normalized SVG shapes", asyn
   assert.match(source, /WebkitTextStroke/);
   assert.match(source, /paintOrder: "stroke fill"/);
   assert.match(source, /canvas-text-holo/);
+  assert.match(source, /--text-holo-rotate-x/);
+  assert.match(source, /--text-holo-rotate-y/);
+  assert.match(source, /className="canvas-text-surface"/);
   assert.match(source, /onPointerMove=\{handleHoloPointerMove\}/);
   assert.match(source, /className="canvas-text-content"[\s\S]*?\.\.\.textContentStyle/);
   assert.match(source, /data-canvas-element/);

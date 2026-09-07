@@ -129,6 +129,14 @@ function CanvasElementItemComponent({
     article.style.setProperty("--text-holo-shift-x", `${shiftX.toFixed(1)}px`);
     article.style.setProperty("--text-holo-shift-y", `${shiftY.toFixed(1)}px`);
     article.style.setProperty("--text-holo-angle", `${angle.toFixed(1)}deg`);
+    article.style.setProperty(
+      "--text-holo-rotate-x",
+      `${((0.5 - y) * 9).toFixed(2)}deg`,
+    );
+    article.style.setProperty(
+      "--text-holo-rotate-y",
+      `${((x - 0.5) * 11).toFixed(2)}deg`,
+    );
   }, []);
 
   const scheduleHoloPointer = useCallback(
@@ -349,6 +357,7 @@ function CanvasElementItemComponent({
 
     return (
       <div
+        className="canvas-text-surface"
         style={{
           ...textBoxStyle,
           width: "100%",

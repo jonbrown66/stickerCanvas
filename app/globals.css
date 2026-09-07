@@ -278,6 +278,17 @@ to {
   text-rendering:geometricprecision
 }
 
+.canvas-text-surface {
+  transform-style:preserve-3d
+}
+
+.simple-sticker[data-text-holo="true"] .canvas-text-surface {
+  transform:perspective(680px) rotateX(var(--text-holo-rotate-x,0deg)) rotateY(var(--text-holo-rotate-y,0deg));
+  transform-origin:center;
+  will-change:transform;
+  transition:transform .12s cubic-bezier(.22,1,.36,1)
+}
+
 .canvas-text-holo {
   background-image:radial-gradient(ellipse 64% 88% at var(--text-holo-x,50%) var(--text-holo-y,50%), #ffffffdb, #ffffff1f 34%, transparent 72%), linear-gradient(var(--text-holo-angle,112deg), #5dddd3e0 0%, #c09affc7 24%, #ffdc84d6 46%, #85e0abd1 64%, #6fb5ffd6 82%, #f7a5d0d1 100%);
   background-position:center, var(--text-holo-x,50%) var(--text-holo-y,50%);
@@ -288,6 +299,12 @@ to {
   background-size:100% 100%,220% 220%;
   -webkit-background-clip:text;
   background-clip:text
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .simple-sticker[data-text-holo="true"] .canvas-text-surface {
+    transition:none
+  }
 }
 
 .simple-sticker[data-selected="true"] {
