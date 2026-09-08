@@ -111,7 +111,7 @@ export function CanvasBottomToolbar({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [menuOpen, shapeMenuOpen, backgroundMenuOpen]);
+  }, [backgroundMenuOpen, menuOpen, shapeMenuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;

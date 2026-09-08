@@ -30,6 +30,7 @@ interface StickerCanvasItemProps {
   entering: boolean;
   isProcessing?: boolean;
   cropMode?: boolean;
+  autoArranging?: boolean;
   onGestureStart: (
     event: PointerEvent<HTMLElement>,
     sticker: CanvasSticker,
@@ -46,6 +47,7 @@ function StickerCanvasItemComponent({
   entering,
   isProcessing = false,
   cropMode = false,
+  autoArranging = false,
   onGestureStart,
   onSelect,
   onToggleCrop,
@@ -296,6 +298,7 @@ function StickerCanvasItemComponent({
       data-entering={entering}
       data-processing={isProcessing}
       data-crop-mode={cropMode}
+      data-auto-arranging={autoArranging}
       data-cropped={hasCrop}
       data-holo={Boolean(sticker.oilFilmEnabled)}
       style={style}

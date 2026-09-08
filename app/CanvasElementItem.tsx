@@ -25,6 +25,7 @@ interface CanvasElementItemProps {
   selected: boolean;
   editing: boolean;
   drawing?: boolean;
+  autoArranging?: boolean;
   onGestureStart: (
     event: PointerEvent<HTMLElement>,
     element: CanvasNonImageElement,
@@ -41,6 +42,7 @@ function CanvasElementItemComponent({
   selected,
   editing,
   drawing = false,
+  autoArranging = false,
   onGestureStart,
   onSelect,
   onStartEditing,
@@ -437,6 +439,7 @@ function CanvasElementItemComponent({
       data-element-type={element.type}
       data-selected={selected}
       data-drawing={drawing}
+      data-auto-arranging={autoArranging}
       data-text-holo={element.type === "text" && element.holoEnabled}
       style={style}
       aria-label={isTextual ? "Text" : "Shape"}

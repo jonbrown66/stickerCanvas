@@ -49,7 +49,8 @@ interface IconProps {
     | "layer-front"
     | "align-left"
     | "align-center"
-    | "align-right";
+    | "align-right"
+    | "layout";
 }
 
 const paths: Record<IconProps["name"], ReactNode> = {
@@ -106,6 +107,14 @@ const paths: Record<IconProps["name"], ReactNode> = {
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <circle cx="8.5" cy="9" r="1.5" />
       <path d="m4 17 4.5-4.5 3.2 3.2 2.3-2.3 6 6" />
+    </>
+  ),
+  layout: (
+    <>
+      <rect x="4" y="4" width="6" height="6" rx="1" />
+      <rect x="14" y="4" width="6" height="6" rx="1" />
+      <rect x="4" y="14" width="6" height="6" rx="1" />
+      <rect x="14" y="14" width="6" height="6" rx="1" />
     </>
   ),
   close: (

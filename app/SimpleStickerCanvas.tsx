@@ -47,7 +47,11 @@ import {
   cropImageBlob,
   createOutlinedCutout,
   exportStickerWithOutline,
+  getStickerVisualPadding,
 } from "@/lib/sticker-image-processing";
+import {
+  getAutoLayoutResult,
+} from "@/lib/canvas-auto-layout";
 import { exportCanvasToPng } from "@/lib/canvas-export";
 import {
   readCanvasBackground,
@@ -417,6 +421,7 @@ export function SimpleStickerCanvas() {
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const externalDragDepthRef = useRef(0);
   const rafRef = useRef<number | null>(null);
+  const autoLayoutAnimationTimerRef = useRef<number | null>(null);
   const pointerSampleRef = useRef<PointerSample | null>(null);
   const pinchRef = useRef<PinchGesture | null>(null);
 
@@ -441,6 +446,7 @@ export function SimpleStickerCanvas() {
   const [isExternalDragActive, setIsExternalDragActive] = useState(false);
   const [activeTool, setActiveTool] = useState<CanvasTool>("select");
   const [shapeMenuOpen, setShapeMenuOpen] = useState(false);
+  const [isAutoLayoutAnimating, setIsAutoLayoutAnimating] = useState(false);
   const [cropEditingId, setCropEditingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawingId, setDrawingId] = useState<string | null>(null);
@@ -889,6 +895,9 @@ export function SimpleStickerCanvas() {
       );
       saveTimerRef.current = {};
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      if (autoLayoutAnimationTimerRef.current !== null) {
+        window.clearTimeout(autoLayoutAnimationTimerRef.current);
+      }
       stickersRef.current.forEach((sticker) => {
         if (sticker.type === "image") URL.revokeObjectURL(sticker.url);
       });
@@ -903,7 +912,10 @@ export function SimpleStickerCanvas() {
     }
   }, []);
 
-  const centerCanvasElements = useCallback((elements: CanvasElement[]) => {
+  const centerCanvasElements = useCallback((
+    elements: CanvasElement[],
+    compositionFrame?: { width: number; height: number },
+  ) => {
     const viewport = viewportRef.current?.getBoundingClientRect();
     if (!viewport || !elements.length) {
       const next = { x: 0, y: 0, zoom: 1 };
@@ -932,6 +944,18 @@ export function SimpleStickerCanvas() {
       bottom = Math.max(bottom, element.y + boundsHeight);
     }
 
+    if (
+      compositionFrame &&
+      Number.isFinite(compositionFrame.width) &&
+      Number.isFinite(compositionFrame.height)
+    ) {
+      const halfWidth = Math.max(1, compositionFrame.width) / 2;
+      const halfHeight = Math.max(1, compositionFrame.height) / 2;
+      left = -halfWidth;
+      top = -halfHeight;
+      right = halfWidth;
+      bottom = halfHeight;
+    }
     const padding = viewport.width <= 760 ? 32 : 96;
     const contentWidth = Math.max(1, right - left);
     const contentHeight = Math.max(1, bottom - top);
@@ -950,6 +974,70 @@ export function SimpleStickerCanvas() {
     updateView(next);
     persistView(next);
   }, [persistView, updateView]);
+
+  const autoLayoutCanvasElements = useCallback(() => {
+    const current = stickersRef.current;
+    if (current.length < 2) {
+      setNotice("Add at least two elements to arrange them");
+      return;
+    }
+
+    const layout = getAutoLayoutResult(
+        current.map((element) => {
+          const rawVisualPadding = element.type === "image"
+            ? getStickerVisualPadding(element.outlineWidth ?? 0, element)
+            : 0;
+          const visualPadding = element.type === "image"
+            ? Math.min(
+                14,
+                Math.max(element.outlineWidth ?? 0, rawVisualPadding * 0.28),
+              )
+            : 0;
+          return {
+            id: element.id,
+            width: element.width + visualPadding * 2,
+            height: element.height + visualPadding * 2,
+            rotation: element.rotation,
+            kind: element.type,
+          };
+        }),
+      );
+    const positions = new Map(
+      layout.positions.map((position) => [position.id, position]),
+    );
+    const next = current.map((element) => {
+      const position = positions.get(element.id);
+      return position
+        ? {
+            ...element,
+            x: position.x,
+            y: position.y,
+            width: element.width * position.scale,
+            height: element.height * position.scale,
+          }
+        : element;
+    });
+
+    setShapeMenuOpen(false);
+    setBackgroundMenuOpen(false);
+    setEditingId(null);
+    setCropEditingId(null);
+    selectSticker(null);
+    if (equalCanvasElementRecords(current, next)) return;
+
+    if (autoLayoutAnimationTimerRef.current !== null) {
+      window.clearTimeout(autoLayoutAnimationTimerRef.current);
+    }
+    setIsAutoLayoutAnimating(true);
+    autoLayoutAnimationTimerRef.current = window.setTimeout(() => {
+      autoLayoutAnimationTimerRef.current = null;
+      setIsAutoLayoutAnimating(false);
+    }, 300);
+    replaceStickers(next);
+    void replaceStickerRecords(next).catch(() => setNotice("Could not save arrangement"));
+    centerCanvasElements(next, { width: layout.width, height: layout.height });
+    setNotice(`Arranged ${next.length} elements`);
+  }, [centerCanvasElements, replaceStickers, selectSticker]);
 
   const updateSticker = useCallback(
     (
@@ -2543,6 +2631,7 @@ export function SimpleStickerCanvas() {
               entering={enteringId === sticker.id}
               isProcessing={processingStickerId === sticker.id}
               cropMode={cropEditingId === sticker.id}
+              autoArranging={isAutoLayoutAnimating}
               onGestureStart={startStickerGesture}
               onSelect={selectSticker}
               onToggleCrop={toggleCropMode}
@@ -2554,6 +2643,7 @@ export function SimpleStickerCanvas() {
               selected={selectedId === sticker.id}
               editing={editingId === sticker.id}
               drawing={drawingId === sticker.id}
+              autoArranging={isAutoLayoutAnimating}
               onGestureStart={startStickerGesture}
               onSelect={selectSticker}
               onStartEditing={startElementEditing}
@@ -2766,6 +2856,8 @@ export function SimpleStickerCanvas() {
         onResetZoom={resetZoom}
         onZoomIn={() => changeZoom(1.25)}
         onFitToContent={fitCanvasToContent}
+        canAutoLayout={stickers.length >= 2}
+        onAutoLayout={autoLayoutCanvasElements}
       />
 
       <input

@@ -7,6 +7,8 @@ interface CanvasZoomControlsProps {
   onResetZoom: () => void;
   onZoomIn: () => void;
   onFitToContent: () => void;
+  canAutoLayout: boolean;
+  onAutoLayout: () => void;
 }
 
 export function CanvasZoomControls({
@@ -16,6 +18,8 @@ export function CanvasZoomControls({
   onResetZoom,
   onZoomIn,
   onFitToContent,
+  canAutoLayout,
+  onAutoLayout,
 }: CanvasZoomControlsProps) {
   return (
     <div
@@ -60,6 +64,16 @@ export function CanvasZoomControls({
         onClick={onFitToContent}
       >
         <Icon name="fit" />
+      </button>
+      <span className="simple-canvas-zoom-divider" aria-hidden="true" />
+      <button
+        type="button"
+        disabled={disabled || !canAutoLayout}
+        onClick={onAutoLayout}
+        aria-label="Auto arrange"
+        title="Auto arrange"
+      >
+        <Icon name="layout" />
       </button>
     </div>
   );
